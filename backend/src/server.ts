@@ -185,6 +185,16 @@ const authMiddleware = CLAWOS_PASSWORD
         return next();
       }
 
+      const clientIp = getRemoteAddress(req);
+      if (isLoginLocked(clientIp)) {
+        const remaining = getRemainingLockoutSeconds(clientIp);
+        return res.status(429).json({
+          success: false,
+          error: `Too many failed attempts. Try again in ${Math.ceil(remaining / 60)} minutes.`,
+          retryAfterSeconds: remaining,
+        });
+      }
+
       const authHeader = req.headers.authorization;
       if (!authHeader || !authHeader.startsWith('Basic ')) {
         return res.status(401).json({ success: false, error: 'Authentication required' });
@@ -194,12 +204,15 @@ const authMiddleware = CLAWOS_PASSWORD
         const credentials = Buffer.from(authHeader.slice(6), 'base64').toString('utf8');
         const [username, password] = credentials.split(':');
         if (username === 'clawos' && password === CLAWOS_PASSWORD) {
+          clearLoginFailures(clientIp);
           return next();
         }
       } catch {
         // Invalid base64
       }
       
+      recordLoginFailure(clientIp);
+      logger.warn(`Failed Basic Auth attempt from ${clientIp}`);
       return res.status(401).json({ success: false, error: 'Invalid credentials' });
     }
   : (_req: express.Request, _res: express.Response, next: express.NextFunction) => next();
@@ -215,9 +228,75 @@ function injectQuarkRequestRewrite(html: string, requestPath: string): string {
   return html.includes(marker) ? html.replace(marker, `${rewriteScript}</head>`) : `${html}${rewriteScript}`;
 }
 
-function getRemoteAddress(req: { socket?: { remoteAddress?: string | undefined } }): string {
+function getRemoteAddress(req: { headers?: Record<string, string | string[] | undefined>; socket?: { remoteAddress?: string | undefined } }): string {
+  const forwarded = req.headers?.['x-forwarded-for'];
+  if (forwarded) {
+    const firstIp = (Array.isArray(forwarded) ? forwarded[0] : forwarded).split(',')[0]?.trim();
+    if (firstIp) {
+      return firstIp;
+    }
+  }
   return req.socket?.remoteAddress ?? 'unknown';
 }
+
+// --- Login brute-force protection ---
+const LOGIN_MAX_FAILURES = 5;
+const LOGIN_LOCKOUT_MS = 15 * 60 * 1000; // 15 minutes
+const LOGIN_CLEANUP_INTERVAL_MS = 10 * 60 * 1000; // cleanup every 10 minutes
+
+interface LoginAttemptRecord {
+  failures: number;
+  lockedUntil: number; // epoch ms, 0 = not locked
+}
+
+const loginAttempts = new Map<string, LoginAttemptRecord>();
+
+function isLoginLocked(ip: string): boolean {
+  const record = loginAttempts.get(ip);
+  if (!record) {
+    return false;
+  }
+  if (record.lockedUntil > 0 && Date.now() < record.lockedUntil) {
+    return true;
+  }
+  if (record.lockedUntil > 0 && Date.now() >= record.lockedUntil) {
+    loginAttempts.delete(ip);
+    return false;
+  }
+  return false;
+}
+
+function recordLoginFailure(ip: string): void {
+  const record = loginAttempts.get(ip) ?? { failures: 0, lockedUntil: 0 };
+  record.failures += 1;
+  if (record.failures >= LOGIN_MAX_FAILURES) {
+    record.lockedUntil = Date.now() + LOGIN_LOCKOUT_MS;
+    logger.warn(`Login locked for IP ${ip} after ${record.failures} failed attempts (${LOGIN_LOCKOUT_MS / 60000}min lockout)`);
+  }
+  loginAttempts.set(ip, record);
+}
+
+function clearLoginFailures(ip: string): void {
+  loginAttempts.delete(ip);
+}
+
+function getRemainingLockoutSeconds(ip: string): number {
+  const record = loginAttempts.get(ip);
+  if (!record || record.lockedUntil <= 0) {
+    return 0;
+  }
+  return Math.max(0, Math.ceil((record.lockedUntil - Date.now()) / 1000));
+}
+
+// Periodically clean up expired lockout records to prevent memory leak
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, record] of loginAttempts) {
+    if (record.lockedUntil > 0 && now >= record.lockedUntil) {
+      loginAttempts.delete(ip);
+    }
+  }
+}, LOGIN_CLEANUP_INTERVAL_MS);
 
 function setTrustedProxyIdentityHeaders(headers: {
   setHeader(name: string, value: string): void;
@@ -291,8 +370,20 @@ app.post('/api/system/auth/verify', express.json(), (req, res) => {
     return res.json({ success: true, message: 'No password required' });
   }
 
+  const clientIp = getRemoteAddress(req);
+  if (isLoginLocked(clientIp)) {
+    const remaining = getRemainingLockoutSeconds(clientIp);
+    logger.warn(`Login attempt from locked IP ${clientIp} (${remaining}s remaining)`);
+    return res.status(429).json({
+      success: false,
+      error: `Too many failed attempts. Try again in ${Math.ceil(remaining / 60)} minutes.`,
+      retryAfterSeconds: remaining,
+    });
+  }
+
   const { password } = req.body;
   if (password === CLAWOS_PASSWORD) {
+    clearLoginFailures(clientIp);
     if (FILEBROWSER_COOKIE_SECRET) {
       res.setHeader('Set-Cookie', buildFileBrowserAuthCookie(req));
       res.append('Set-Cookie', buildMediaAuthCookie(req));
@@ -301,6 +392,8 @@ app.post('/api/system/auth/verify', express.json(), (req, res) => {
     }
     res.json({ success: true, message: 'Authentication successful' });
   } else {
+    recordLoginFailure(clientIp);
+    logger.warn(`Failed login attempt from ${clientIp}`);
     res.status(401).json({ success: false, error: 'Invalid password' });
   }
 });
