@@ -65,10 +65,12 @@ import {
   saveMonthlyReports,
   readFactPool,
   saveFactPool,
+  mergeFactPool,
   readPostMarketResult,
   savePostMarketResult,
   readLLMExtractionResult,
   saveLLMExtractionResult,
+  mergeLLMExtractionResult,
   readIntradayAlerts,
   saveIntradayAlerts,
   readIntradayMonitorStatus,
@@ -4419,6 +4421,98 @@ export async function runStockAnalysisPostMarket(
   })()
 
   return currentPostMarketPromise
+}
+
+// ==================== G1.5: 晨间补充分析 ====================
+
+/**
+ * 晨间补充数据采集 + LLM 信息提取
+ *
+ * 在交易日 07:30 触发，补充前一个交易日夜间产生的新闻/公告等增量数据。
+ * 只运行 Phase 4（数据采集）+ Phase 5（LLM 信息提取），不重复跑持仓评估和风控。
+ * 采集结果合并到前一个交易日的事实池和 LLM 提取结果中，供当天盘前分析使用。
+ */
+export async function runMorningSupplementAnalysis(stockAnalysisDir: string): Promise<void> {
+  await ensureStockAnalysisStructure(stockAnalysisDir)
+  const startMs = Date.now()
+  const today = todayDate()
+
+  // 获取前一个交易日日期（晨间采集的数据归属到前一个交易日）
+  const recentDates = getRecentTradeDates(today, 3)
+  const previousTradeDate = recentDates.length >= 2 ? recentDates[1] : today
+  logger.info(`[stock-analysis] [晨间补充] 开始: today=${today} targetTradeDate=${previousTradeDate}`, { module: 'StockAnalysis' })
+  saLog.info('Service', `[晨间补充] 开始: today=${today} targetTradeDate=${previousTradeDate}`)
+
+  try {
+    // 读取缓存的行情和市场状态（使用前一个交易日收盘后缓存的数据）
+    const quoteCache = await readStockAnalysisQuoteCache(stockAnalysisDir)
+    const quotes = new Map((quoteCache?.quotes ?? []).map((q) => [q.code, q]))
+    const marketState = await readStockAnalysisMarketState(stockAnalysisDir, previousTradeDate)
+
+    if (quotes.size === 0) {
+      logger.warn(`[stock-analysis] [晨间补充] 行情缓存为空，跳过数据采集`, { module: 'StockAnalysis' })
+      saLog.warn('Service', `[晨间补充] 行情缓存为空，跳过`)
+      return
+    }
+
+    // Phase 4: 数据采集（调用 data-agents 模块）
+    let factPoolUpdated = false
+    try {
+      const { collectAllAgents } = await import('./data-agents')
+      const agentConfig = await readDataAgentConfig(stockAnalysisDir)
+      const incomingFactPool = await collectAllAgents(stockAnalysisDir, previousTradeDate, quotes, marketState!, agentConfig)
+
+      // 读取已有的事实池，合并或直接保存
+      const existingFactPool = await readFactPool(stockAnalysisDir, previousTradeDate)
+      if (existingFactPool) {
+        await mergeFactPool(stockAnalysisDir, existingFactPool, incomingFactPool)
+        logger.info(`[stock-analysis] [晨间补充] 事实池已合并，新数据点: ${incomingFactPool.agentLogs.reduce((sum, log) => sum + log.dataPointCount, 0)}`)
+      } else {
+        await saveFactPool(stockAnalysisDir, incomingFactPool)
+        logger.info(`[stock-analysis] [晨间补充] 事实池已保存（首次），数据点: ${incomingFactPool.agentLogs.reduce((sum, log) => sum + log.dataPointCount, 0)}`)
+      }
+      factPoolUpdated = true
+    } catch (error) {
+      logger.error(`[stock-analysis] [晨间补充] 数据采集失败: ${(error as Error).message}`)
+      saLog.error('Service', `[晨间补充] 数据采集失败: ${(error as Error).message}`)
+    }
+
+    // Phase 5: LLM 信息提取
+    if (factPoolUpdated) {
+      try {
+        const { runLLMExtraction } = await import('./llm-extraction')
+        const factPool = await readFactPool(stockAnalysisDir, previousTradeDate)
+        if (!factPool) {
+          logger.warn(`[stock-analysis] [晨间补充] FactPool 为空，跳过 LLM 信息提取`)
+        } else {
+          const aiConfig = await readStockAnalysisAIConfig(stockAnalysisDir)
+          const incomingExtraction = await runLLMExtraction(stockAnalysisDir, factPool, aiConfig)
+
+          // 合并到已有的 LLM 提取结果
+          const existingExtraction = await readLLMExtractionResult(stockAnalysisDir, previousTradeDate)
+          if (existingExtraction) {
+            const merged = await mergeLLMExtractionResult(stockAnalysisDir, existingExtraction, incomingExtraction)
+            logger.info(`[stock-analysis] [晨间补充] LLM 信息提取已合并，公告事件: ${merged.announcements.length}，新闻影响: ${merged.newsImpacts.length}`)
+          } else {
+            await saveLLMExtractionResult(stockAnalysisDir, incomingExtraction)
+            logger.info(`[stock-analysis] [晨间补充] LLM 信息提取已保存（首次），公告事件: ${incomingExtraction.announcements.length}，新闻影响: ${incomingExtraction.newsImpacts.length}`)
+          }
+        }
+      } catch (error) {
+        logger.error(`[stock-analysis] [晨间补充] LLM 信息提取失败: ${(error as Error).message}`)
+        saLog.error('Service', `[晨间补充] LLM 信息提取失败: ${(error as Error).message}`)
+      }
+    }
+
+    const elapsedMs = Date.now() - startMs
+    logger.info(`[stock-analysis] [晨间补充] 完成: targetTradeDate=${previousTradeDate} 耗时=${elapsedMs}ms 事实池=${factPoolUpdated ? '已更新' : '未更新'}`, { module: 'StockAnalysis' })
+    saLog.info('Service', `[晨间补充] 完成: targetTradeDate=${previousTradeDate} 耗时=${elapsedMs}ms 事实池=${factPoolUpdated ? '已更新' : '未更新'}`)
+  } catch (error) {
+    const elapsedMs = Date.now() - startMs
+    logger.error(`[stock-analysis] [晨间补充] 流程异常: ${(error as Error).message}`, { error })
+    saLog.error('Service', `[晨间补充] 流程异常: ${(error as Error).message} 耗时=${elapsedMs}ms`)
+    throw error
+  }
 }
 
 // ==================== S1: 盘中实时监控 ====================

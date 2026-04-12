@@ -815,6 +815,80 @@ export async function saveFactPool(stockAnalysisDir: string, factPool: FactPool)
   await pruneOldDateFiles(path.join(stockAnalysisDir, 'data-agents'), 'fact-pool-', MAX_FACT_POOL_DAYS)
 }
 
+/** 将新采集的事实池合并到已有的事实池中（追加去重） */
+export async function mergeFactPool(stockAnalysisDir: string, existing: FactPool, incoming: FactPool): Promise<FactPool> {
+  const merged: FactPool = {
+    updatedAt: new Date().toISOString(),
+    tradeDate: existing.tradeDate,
+    // 宏观数据：优先用新采集的（可能更新）
+    macroData: incoming.macroData ?? existing.macroData,
+    // 数组类型字段：追加去重
+    policyEvents: deduplicateByKey(
+      [...existing.policyEvents, ...incoming.policyEvents],
+      (e) => e.id || `${e.title}::${e.source}`,
+    ),
+    companyAnnouncements: deduplicateByKey(
+      [...existing.companyAnnouncements, ...incoming.companyAnnouncements],
+      (e) => `${e.code}::${e.title}`,
+    ),
+    industryNews: deduplicateByKey(
+      [...existing.industryNews, ...incoming.industryNews],
+      (e) => e.id || `${e.title}::${e.source}`,
+    ),
+    socialSentiment: deduplicateByKey(
+      [...existing.socialSentiment, ...incoming.socialSentiment],
+      (e) => `${e.platform}::${e.collectedAt}`,
+    ),
+    // 对象类型：优先用新采集的
+    globalMarkets: incoming.globalMarkets ?? existing.globalMarkets,
+    priceVolumeExtras: incoming.priceVolumeExtras ?? existing.priceVolumeExtras,
+    dataQuality: incoming.dataQuality ?? existing.dataQuality,
+    // agentLogs：全部保留（标记来源）
+    agentLogs: [...existing.agentLogs, ...incoming.agentLogs],
+  }
+  await saveFactPool(stockAnalysisDir, merged)
+  return merged
+}
+
+/** 将新的 LLM 提取结果合并到已有结果中 */
+export async function mergeLLMExtractionResult(
+  stockAnalysisDir: string,
+  existing: LLMExtractionResult,
+  incoming: LLMExtractionResult,
+): Promise<LLMExtractionResult> {
+  const merged: LLMExtractionResult = {
+    extractedAt: new Date().toISOString(),
+    tradeDate: existing.tradeDate,
+    announcements: deduplicateByKey(
+      [...existing.announcements, ...incoming.announcements],
+      (e) => `${e.company}::${e.eventType}::${e.magnitude}`,
+    ),
+    newsImpacts: deduplicateByKey(
+      [...existing.newsImpacts, ...incoming.newsImpacts],
+      (e) => `${e.topic}::${e.impactDirection}`,
+    ),
+    // 舆情指数：以最新一次为准
+    sentimentIndex: incoming.sentimentIndex ?? existing.sentimentIndex,
+    llmCalls: [...existing.llmCalls, ...incoming.llmCalls],
+  }
+  await saveLLMExtractionResult(stockAnalysisDir, merged)
+  return merged
+}
+
+/** 根据 key 函数去重，保留首次出现的元素 */
+function deduplicateByKey<T>(items: T[], keyFn: (item: T) => string): T[] {
+  const seen = new Set<string>()
+  const result: T[] = []
+  for (const item of items) {
+    const key = keyFn(item)
+    if (!seen.has(key)) {
+      seen.add(key)
+      result.push(item)
+    }
+  }
+  return result
+}
+
 export async function readPostMarketResult(stockAnalysisDir: string, tradeDate: string): Promise<StockAnalysisPostMarketResult | null> {
   await ensureStockAnalysisStructure(stockAnalysisDir)
   return readJson<StockAnalysisPostMarketResult | null>(getPostMarketResultPath(stockAnalysisDir, tradeDate), null)

@@ -8,6 +8,7 @@ import {
   bootstrapStockAnalysis,
   generateMonthlyReport,
   generateWeeklyReport,
+  runMorningSupplementAnalysis,
   runStockAnalysisDaily,
   runStockAnalysisPostMarket,
   startIntradayMonitor,
@@ -182,6 +183,33 @@ export function initStockAnalysisScheduler() {
         const msg = (error as Error).message
         saLog.error('scheduler', `cron:monthly 月度报告生成失败 错误=${msg}`)
         logger.error(`AI 炒股月度报告生成失败: ${msg}`, { module: 'StockAnalysis' })
+      })
+  }, CRON_OPTIONS)
+
+  // 晨间补充 07:30 周一到周五 — 补充夜间新闻/公告数据 (G1.5)
+  // 只跑 Phase 4（数据采集）+ Phase 5（LLM 信息提取），合并到前一个交易日的事实池
+  cron.schedule('30 7 * * 1-5', () => {
+    if (!isTradingDay()) {
+      logger.info('今日非交易日，跳过晨间补充分析', { module: 'StockAnalysis' })
+      return
+    }
+    if (hasCronCompletedToday('morningSupplement')) {
+      logger.info('[M8] 今日晨间补充分析已由 cron 完成，跳过重复执行', { module: 'StockAnalysis' })
+      return
+    }
+    void getStockAnalysisDir()
+      .then((dir) => {
+        saLog.info('scheduler', 'cron:morningSupplement 晨间补充分析开始')
+        return runMorningSupplementAnalysis(dir)
+      })
+      .then(() => {
+        markCronCompletedToday('morningSupplement')
+        saLog.info('scheduler', 'cron:morningSupplement 晨间补充分析完成')
+      })
+      .catch((error) => {
+        const msg = (error as Error).message
+        saLog.error('scheduler', `cron:morningSupplement 晨间补充分析失败 错误=${msg}`)
+        logger.error(`AI 炒股晨间补充分析失败: ${msg}`, { module: 'StockAnalysis' })
       })
   }, CRON_OPTIONS)
 
