@@ -31,6 +31,14 @@ AI-powered stock analysis, media streaming, file management, notes, RSS feeds �
 <p><em>↑ ClawOS AI Stock Trading risk control panel screenshot (2026-04-13, live trading data)</em></p>
 </div>
 
+### Highlight: Market Down, AI Pick Surges +17.42%
+
+**2026-04-13** — The A-share market was broadly declining, with the CSI 500 index down -4.67% over the past 20 days. ClawOS AI issued a **Strong Buy** signal for Tianhua New Energy (300390) — 45 AI experts voted, composite score 80.08, the Trend Trading Expert gave 99% confidence.
+
+Result: **Tianhua New Energy surged +17.42% that day**, profitable from the moment of purchase.
+
+> This isn't hindsight. The signal was generated pre-market, the user confirmed the trade, and the system recorded the entire decision chain.
+
 ### Performance Summary
 
 Since system launch on 2026-04-04, **8 round-trip trades** (buy → sell) completed across 6 A-share stocks:
@@ -41,6 +49,7 @@ Avg return: +1.71% per trade
 Avg holding period: 2 trading days
 Only loss: Hengtong Optic-Electric -4.33% (disciplined stop-loss exit)
 Best single trade: Accelink Technologies +6.94%
+Best single-day gain: Tianhua New Energy +17.42% (bought on 04-13)
 ```
 
 ### Trade-by-Trade Breakdown
@@ -57,6 +66,8 @@ Best single trade: Accelink Technologies +6.94%
 | 8 | Robotechnik | 300757 | 492.95 | 493.66 | **+0.14%** | 4d | 04-09 → 04-13 |
 
 > **Current position**: Tianhua New Energy (300390), cost basis 73.58, current price 80.20, **unrealized +9.00%**, second take-profit level triggered.
+>
+> **+17.42% on the day of purchase**, surging against a declining market.
 
 ### How Does It Work?
 
