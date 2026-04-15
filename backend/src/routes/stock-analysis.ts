@@ -48,6 +48,11 @@ import {
   getStockAnalysisAvailableDates,
   getStockAnalysisExpertAnalysis,
   getStockAnalysisDataCollection,
+  getWatchlistWithQuotes,
+  searchStockPool,
+  addWatchlistItem,
+  removeWatchlistItem,
+  updateWatchlistNote,
 } from '../services/stock-analysis/service'
 
 const router = Router()
@@ -739,6 +744,77 @@ router.get('/data-collection', async (req, res) => {
     res.json({ success: true, data })
   } catch (error) {
     logger.error(`AI 炒股 data-collection 失败: ${(error as Error).message}`, { module: 'StockAnalysis' })
+    res.status(500).json({ success: false, error: sanitizeErrorMessage(error) })
+  }
+})
+
+// ── 自选股票 (Watchlist) ──
+
+router.get('/watchlist', async (_req, res) => {
+  try {
+    const data = await getWatchlistWithQuotes(await getStockAnalysisDir())
+    res.json({ success: true, data })
+  } catch (error) {
+    logger.error(`自选股票获取失败: ${(error as Error).message}`, { module: 'StockAnalysis' })
+    res.status(500).json({ success: false, error: sanitizeErrorMessage(error) })
+  }
+})
+
+router.get('/watchlist/search', async (req, res) => {
+  try {
+    const query = typeof req.query.q === 'string' ? req.query.q : ''
+    const data = await searchStockPool(await getStockAnalysisDir(), query)
+    res.json({ success: true, data })
+  } catch (error) {
+    logger.error(`股票搜索失败: ${(error as Error).message}`, { module: 'StockAnalysis' })
+    res.status(500).json({ success: false, error: sanitizeErrorMessage(error) })
+  }
+})
+
+router.post('/watchlist/add', async (req, res) => {
+  try {
+    const { code, name, market, exchange, industryName, note } = req.body
+    if (!code || !name || !market) {
+      return res.status(400).json({ success: false, error: '缺少必填字段: code, name, market' })
+    }
+    const data = await addWatchlistItem(await getStockAnalysisDir(), {
+      code,
+      name,
+      market,
+      exchange: exchange || '',
+      industryName: industryName ?? null,
+    }, sanitizeNote(note) ?? '')
+    res.json({ success: true, data })
+  } catch (error) {
+    logger.error(`添加自选股票失败: ${(error as Error).message}`, { module: 'StockAnalysis' })
+    res.status(500).json({ success: false, error: sanitizeErrorMessage(error) })
+  }
+})
+
+router.post('/watchlist/remove', async (req, res) => {
+  try {
+    const { code } = req.body
+    if (!code) {
+      return res.status(400).json({ success: false, error: '缺少 code 参数' })
+    }
+    const data = await removeWatchlistItem(await getStockAnalysisDir(), code)
+    res.json({ success: true, data })
+  } catch (error) {
+    logger.error(`移除自选股票失败: ${(error as Error).message}`, { module: 'StockAnalysis' })
+    res.status(500).json({ success: false, error: sanitizeErrorMessage(error) })
+  }
+})
+
+router.post('/watchlist/note', async (req, res) => {
+  try {
+    const { code, note } = req.body
+    if (!code) {
+      return res.status(400).json({ success: false, error: '缺少 code 参数' })
+    }
+    const data = await updateWatchlistNote(await getStockAnalysisDir(), code, sanitizeNote(note) ?? '')
+    res.json({ success: true, data })
+  } catch (error) {
+    logger.error(`更新自选股票备注失败: ${(error as Error).message}`, { module: 'StockAnalysis' })
     res.status(500).json({ success: false, error: sanitizeErrorMessage(error) })
   }
 })

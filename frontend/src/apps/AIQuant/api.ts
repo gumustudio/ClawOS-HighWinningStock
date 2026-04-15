@@ -22,6 +22,9 @@ import type {
   StockAnalysisStrategyConfig,
   StockAnalysisTradeRecord,
   StockAnalysisWatchLogEntry,
+  StockSearchResult,
+  UserWatchlistItem,
+  WatchlistResponse,
 } from './types'
 
 async function requestJson<T>(input: string, init?: RequestInit): Promise<T> {
@@ -305,4 +308,38 @@ export function fetchExpertAnalysis(date: string) {
 
 export function fetchDataCollection(date: string) {
   return requestJson<DataCollectionResponse>(`/api/system/stock-analysis/data-collection?date=${date}`)
+}
+
+// ── 自选股票 (Watchlist) API ──────────────────────────────────
+
+export function fetchWatchlist() {
+  return requestJson<WatchlistResponse>('/api/system/stock-analysis/watchlist')
+}
+
+export function searchStocks(query: string) {
+  return requestJson<StockSearchResult[]>(`/api/system/stock-analysis/watchlist/search?q=${encodeURIComponent(query)}`)
+}
+
+export function addWatchlistStock(stock: StockSearchResult, note?: string) {
+  return requestJson<UserWatchlistItem[]>('/api/system/stock-analysis/watchlist/add', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...stock, note: note ?? '' }),
+  })
+}
+
+export function removeWatchlistStock(code: string) {
+  return requestJson<UserWatchlistItem[]>('/api/system/stock-analysis/watchlist/remove', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code }),
+  })
+}
+
+export function updateWatchlistStockNote(code: string, note: string) {
+  return requestJson<UserWatchlistItem[]>('/api/system/stock-analysis/watchlist/note', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code, note }),
+  })
 }

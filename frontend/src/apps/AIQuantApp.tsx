@@ -11,6 +11,7 @@ import {
   LightBulbIcon,
   MagnifyingGlassIcon,
   ShieldCheckIcon,
+  StarIcon,
   UserIcon,
   XMarkIcon,
 } from '@heroicons/react/24/outline'
@@ -65,6 +66,7 @@ import { AIConfigTab } from './AIQuant/components/AIConfigTab'
 import { GuideTab } from './AIQuant/components/GuideTab'
 import { ExpertAnalysisTab } from './AIQuant/components/ExpertAnalysisTab'
 import { DataCollectionTab } from './AIQuant/components/DataCollectionTab'
+import { WatchlistTab } from './AIQuant/components/WatchlistTab'
 import { createAppNotifier } from './notify'
 import { useNotificationStore } from '../store/useNotificationStore'
 
@@ -1049,6 +1051,7 @@ export default function AIQuantApp() {
         <nav className="flex-1 px-2 space-y-1">
           <TabButton tab="dashboard" icon={<ChartBarIcon className="w-5 h-5" />} label="总览看板" activeTab={activeTab} onClick={setActiveTab} />
           <TabButton tab="strategies" icon={<LightBulbIcon className="w-5 h-5" />} label="每日策略" activeTab={activeTab} onClick={setActiveTab} />
+          <TabButton tab="watchlist" icon={<StarIcon className="w-5 h-5" />} label="自选股票" activeTab={activeTab} onClick={setActiveTab} />
           <TabButton tab="risk" icon={<ShieldCheckIcon className="w-5 h-5" />} label="持仓风控" activeTab={activeTab} onClick={setActiveTab} />
           <TabButton tab="memory" icon={<ClockIcon className="w-5 h-5" />} label="记忆复盘" activeTab={activeTab} onClick={setActiveTab} />
           <TabButton tab="profile" icon={<UserIcon className="w-5 h-5" />} label="行为画像" activeTab={activeTab} onClick={setActiveTab} />
@@ -1183,6 +1186,7 @@ export default function AIQuantApp() {
               {activeTab === 'expert_analysis' && <ExpertAnalysisTab />}
               {activeTab === 'data_collection' && <DataCollectionTab />}
               {activeTab === 'guide' && <GuideTab />}
+              {activeTab === 'watchlist' && <WatchlistTab />}
             </>
           ) : null}
         </div>

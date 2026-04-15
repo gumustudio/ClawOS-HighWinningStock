@@ -1288,3 +1288,44 @@ export interface DataAgentConfigStore {
   updatedAt: string
   agents: DataAgentConfigItem[]
 }
+
+// ==================== Phase 12: 自选股票 (Watchlist) ====================
+
+/** 自选股票条目 */
+export interface UserWatchlistItem {
+  code: string
+  name: string
+  market: 'sh' | 'sz' | 'bj'
+  exchange: string
+  industryName: string | null
+  /** 用户备注 */
+  note: string
+  /** 添加时间 ISO 字符串 */
+  addedAt: string
+}
+
+/** 自选股票实时行情（合并 SpotQuote + K线历史） */
+export interface WatchlistQuoteSnapshot {
+  code: string
+  name: string
+  latestPrice: number
+  changePercent: number
+  open: number
+  high: number
+  low: number
+  previousClose: number
+  turnoverRate: number
+  totalMarketCap: number
+  circulatingMarketCap: number
+  /** 成交量（手） — 从 K 线数据推算或行情直接获取 */
+  volume: number
+  /** 近 N 日 K 线历史（用于分时图） */
+  klineHistory: StockAnalysisKlinePoint[]
+}
+
+/** 自选股票完整响应（列表 + 实时行情） */
+export interface WatchlistResponse {
+  items: UserWatchlistItem[]
+  quotes: Record<string, WatchlistQuoteSnapshot>
+  updatedAt: string
+}

@@ -5,7 +5,7 @@ import {
 import type { StockAnalysisOverview } from '../types'
 import { dataStateLabel, runStateLabel } from '../utils'
 
-export type Tab = 'dashboard' | 'strategies' | 'risk' | 'memory' | 'profile' | 'aiconfig' | 'guide' | 'expert_analysis' | 'data_collection'
+export type Tab = 'dashboard' | 'strategies' | 'risk' | 'memory' | 'profile' | 'aiconfig' | 'guide' | 'expert_analysis' | 'data_collection' | 'watchlist'
 
 export function LoadingState() {
   return <div className="h-full flex items-center justify-center text-slate-500">正在初始化 A 股数据与今日信号...</div>

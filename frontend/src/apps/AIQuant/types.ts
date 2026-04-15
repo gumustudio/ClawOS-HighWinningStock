@@ -1071,3 +1071,64 @@ export interface DataCollectionResponse {
   factPool: FactPool | null
   llmExtraction: LLMExtractionResult | null
 }
+
+// ==================== Phase 12: 自选股票 (Watchlist) ====================
+
+/** 自选股票条目 */
+export interface UserWatchlistItem {
+  code: string
+  name: string
+  market: 'sh' | 'sz' | 'bj'
+  exchange: string
+  industryName: string | null
+  note: string
+  addedAt: string
+}
+
+/** K 线数据点 */
+export interface KlinePoint {
+  date: string
+  open: number
+  close: number
+  high: number
+  low: number
+  volume: number
+  turnover: number
+  amplitude: number
+  changePercent: number
+  changeAmount: number
+  turnoverRate: number
+}
+
+/** 自选股票实时行情快照 */
+export interface WatchlistQuoteSnapshot {
+  code: string
+  name: string
+  latestPrice: number
+  changePercent: number
+  open: number
+  high: number
+  low: number
+  previousClose: number
+  turnoverRate: number
+  totalMarketCap: number
+  circulatingMarketCap: number
+  volume: number
+  klineHistory: KlinePoint[]
+}
+
+/** 自选股票完整响应 */
+export interface WatchlistResponse {
+  items: UserWatchlistItem[]
+  quotes: Record<string, WatchlistQuoteSnapshot>
+  updatedAt: string
+}
+
+/** 股票搜索结果条目 */
+export interface StockSearchResult {
+  code: string
+  name: string
+  market: 'sh' | 'sz' | 'bj'
+  exchange: string
+  industryName?: string | null
+}

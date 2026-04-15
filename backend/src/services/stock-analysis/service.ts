@@ -83,6 +83,8 @@ import {
   saveDataAgentConfig,
   cleanupAllStaleTemporaryFiles,
   withFileLock,
+  readUserWatchlist,
+  saveUserWatchlist,
 } from './store'
 import type {
   DecisionSource,
@@ -170,6 +172,9 @@ import type {
   DataAgentConfigStore,
   LLMExtractionAgentId,
   StockAnalysisOverrideStats,
+  UserWatchlistItem,
+  WatchlistQuoteSnapshot,
+  WatchlistResponse,
 } from './types'
 
 const execFileAsync = promisify(execFile)
@@ -6151,6 +6156,133 @@ export async function getStockAnalysisDataCollection(stockAnalysisDir: string, d
     readLLMExtractionResult(stockAnalysisDir, date),
   ])
   return { tradeDate: date, factPool, llmExtraction }
+}
+
+// ==================== Phase 12: 自选股票 (Watchlist) ====================
+
+/** 获取自选股票列表 + 实时行情 + K 线历史 */
+export async function getWatchlistWithQuotes(stockAnalysisDir: string): Promise<WatchlistResponse> {
+  const items = await readUserWatchlist(stockAnalysisDir)
+  if (items.length === 0) {
+    return { items, quotes: {}, updatedAt: new Date().toISOString() }
+  }
+
+  const codes = items.map((item) => item.code)
+  const quotes: Record<string, WatchlistQuoteSnapshot> = {}
+
+  // 获取实时行情（复用现有的多源冗余获取）
+  let spotQuotes = new Map<string, StockAnalysisSpotQuote>()
+  try {
+    spotQuotes = await fetchSpotQuotesFromTencent(codes)
+    if (spotQuotes.size === 0) {
+      spotQuotes = await fetchSpotQuotesFresh(codes)
+    }
+  } catch (error) {
+    saLog.warn('Watchlist', `获取实时行情失败: ${(error as Error).message}`)
+    try {
+      spotQuotes = await fetchSpotQuotesFresh(codes)
+    } catch (fallbackError) {
+      saLog.warn('Watchlist', `备用源获取行情也失败: ${(fallbackError as Error).message}`)
+    }
+  }
+
+  // 获取 K 线历史（并发限制，复用 getStockHistoryData 的6级数据源回退）
+  const KLINE_CONCURRENCY = 5
+  const klineResults = new Map<string, StockAnalysisKlinePoint[]>()
+  for (let i = 0; i < codes.length; i += KLINE_CONCURRENCY) {
+    const batch = codes.slice(i, i + KLINE_CONCURRENCY)
+    const results = await Promise.allSettled(
+      batch.map(async (code) => {
+        const envelope = await getStockHistoryData(stockAnalysisDir, code)
+        return { code, data: envelope.data }
+      }),
+    )
+    for (const result of results) {
+      if (result.status === 'fulfilled') {
+        klineResults.set(result.value.code, result.value.data)
+      }
+    }
+  }
+
+  for (const item of items) {
+    const spot = spotQuotes.get(item.code)
+    const kline = klineResults.get(item.code) ?? []
+    // 取最近 60 个交易日的 K 线
+    const recentKline = kline.slice(-60)
+
+    quotes[item.code] = {
+      code: item.code,
+      name: spot?.name ?? item.name,
+      latestPrice: spot?.latestPrice ?? 0,
+      changePercent: spot?.changePercent ?? 0,
+      open: spot?.open ?? 0,
+      high: spot?.high ?? 0,
+      low: spot?.low ?? 0,
+      previousClose: spot?.previousClose ?? 0,
+      turnoverRate: spot?.turnoverRate ?? 0,
+      totalMarketCap: spot?.totalMarketCap ?? 0,
+      circulatingMarketCap: spot?.circulatingMarketCap ?? 0,
+      volume: kline.length > 0 ? kline[kline.length - 1].volume : 0,
+      klineHistory: recentKline,
+    }
+  }
+
+  return { items, quotes, updatedAt: new Date().toISOString() }
+}
+
+/** 搜索股票池（模糊匹配代码或名称） */
+export async function searchStockPool(stockAnalysisDir: string, query: string): Promise<StockAnalysisWatchlistCandidate[]> {
+  if (!query || query.trim().length === 0) return []
+  const pool = await readStockAnalysisStockPool(stockAnalysisDir)
+  const keyword = query.trim().toLowerCase()
+  const matched = pool.filter((stock) =>
+    stock.code.toLowerCase().includes(keyword) ||
+    stock.name.toLowerCase().includes(keyword),
+  )
+  return matched.slice(0, 20)
+}
+
+/** 添加自选股票 */
+export async function addWatchlistItem(
+  stockAnalysisDir: string,
+  candidate: StockAnalysisWatchlistCandidate,
+  note: string,
+): Promise<UserWatchlistItem[]> {
+  const items = await readUserWatchlist(stockAnalysisDir)
+  if (items.some((item) => item.code === candidate.code)) {
+    return items
+  }
+  const newItem: UserWatchlistItem = {
+    code: candidate.code,
+    name: candidate.name,
+    market: candidate.market,
+    exchange: candidate.exchange,
+    industryName: candidate.industryName ?? null,
+    note,
+    addedAt: new Date().toISOString(),
+  }
+  items.push(newItem)
+  await saveUserWatchlist(stockAnalysisDir, items)
+  return items
+}
+
+/** 移除自选股票 */
+export async function removeWatchlistItem(stockAnalysisDir: string, code: string): Promise<UserWatchlistItem[]> {
+  const items = await readUserWatchlist(stockAnalysisDir)
+  const filtered = items.filter((item) => item.code !== code)
+  await saveUserWatchlist(stockAnalysisDir, filtered)
+  return filtered
+}
+
+/** 更新自选股票备注 */
+export async function updateWatchlistNote(stockAnalysisDir: string, code: string, note: string): Promise<UserWatchlistItem[]> {
+  const items = await readUserWatchlist(stockAnalysisDir)
+  const target = items.find((item) => item.code === code)
+  if (target) {
+    target.note = note
+    await saveUserWatchlist(stockAnalysisDir, items)
+  }
+  return items
 }
 
 // 测试用导出，仅供单元测试使用

@@ -40,6 +40,7 @@ import type {
   StockAnalysisWatchLogEntry,
   StockAnalysisWatchlistCandidate,
   StockAnalysisWeeklySummary,
+  UserWatchlistItem,
 } from './types'
 
 export const DEFAULT_RISK_CONTROL_STATE: StockAnalysisRiskControlState = {
@@ -1034,4 +1035,22 @@ export async function cleanupAllStaleTemporaryFiles(stockAnalysisDir: string): P
   if (totalCleaned > 0) {
     logger.info(`[store] 清理了 ${totalCleaned} 个残留 .tmp 文件`, { module: 'StockAnalysis' })
   }
+}
+
+// ── 自选股票 (Watchlist) ─────────────────────────────────
+
+const MAX_WATCHLIST_ITEMS = 50
+
+function getWatchlistPath(stockAnalysisDir: string) {
+  return path.join(stockAnalysisDir, 'config', 'watchlist.json')
+}
+
+export async function readUserWatchlist(stockAnalysisDir: string): Promise<UserWatchlistItem[]> {
+  await ensureStockAnalysisStructure(stockAnalysisDir)
+  return readJson<UserWatchlistItem[]>(getWatchlistPath(stockAnalysisDir), [])
+}
+
+export async function saveUserWatchlist(stockAnalysisDir: string, items: UserWatchlistItem[]): Promise<void> {
+  const trimmed = items.slice(0, MAX_WATCHLIST_ITEMS)
+  await writeJson(getWatchlistPath(stockAnalysisDir), trimmed)
 }
