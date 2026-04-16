@@ -3655,11 +3655,38 @@ async function buildModelGroupPerformance(stockAnalysisDir: string, expertPerfor
     ]
   }
 
+  // 从 AI 配置中读取 modelId → provider 映射，用于旧数据 provider 回填
+  const aiConfig = await readStockAnalysisAIConfig(stockAnalysisDir)
+  const modelProviderMap = new Map<string, { providerIds: string[]; providerNames: string[] }>()
+  if (aiConfig) {
+    for (const provider of aiConfig.providers) {
+      if (!provider.enabled) continue
+      for (const modelId of provider.models) {
+        const normalized = normalizeModelId(modelId)
+        const existing = modelProviderMap.get(normalized) ?? { providerIds: [], providerNames: [] }
+        if (!existing.providerIds.includes(provider.id)) {
+          existing.providerIds.push(provider.id)
+          existing.providerNames.push(provider.name)
+        }
+        modelProviderMap.set(normalized, existing)
+      }
+    }
+  }
+
   // 标准化 modelId（合并大小写差异和历史遗留名称）
   function normalizeModelId(id: string): string {
     const lower = id.toLowerCase()
     if (lower === 'qwen3.5-plus') return 'qwen3.6-plus'
     return lower
+  }
+
+  // 从配置推断旧 vote 的供应商信息
+  function inferProvider(modelId: string): { providerId: string; providerName: string } {
+    const mapping = modelProviderMap.get(modelId)
+    if (!mapping || mapping.providerIds.length === 0) return { providerId: '', providerName: '' }
+    if (mapping.providerIds.length === 1) return { providerId: mapping.providerIds[0], providerName: mapping.providerNames[0] }
+    // 多供应商时无法确定，标注为"多供应商"
+    return { providerId: '', providerName: mapping.providerNames.join('/') }
   }
 
   // 构建分组键：providerId/modelId 或仅 modelId（旧数据无 provider 时）
@@ -3668,8 +3695,16 @@ async function buildModelGroupPerformance(stockAnalysisDir: string, expertPerfor
       return { groupKey: 'rules', modelId: 'rule-engine', providerId: '', providerName: '', displayName: '规则引擎' }
     }
     const modelId = normalizeModelId(vote.modelId || 'unknown')
-    const providerId = vote.providerId || ''
-    const providerName = vote.providerName || ''
+    let providerId = vote.providerId || ''
+    let providerName = vote.providerName || ''
+
+    // 旧数据没有 provider 时，从配置中推断
+    if (!providerId && !providerName) {
+      const inferred = inferProvider(modelId)
+      providerId = inferred.providerId
+      providerName = inferred.providerName
+    }
+
     const groupKey = providerId ? `${providerId}/${modelId}` : modelId
     const displayName = providerName ? `${modelId} (${providerName})` : modelId
     return { groupKey, modelId, providerId, providerName, displayName }
