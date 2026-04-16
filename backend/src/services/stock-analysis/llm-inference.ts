@@ -53,8 +53,14 @@ export interface ExpertVote {
   confidence: number
   /** LLM 给出的一句话理由 */
   reason: string
-  /** 使用的模型 ID */
+  /** 实际调用成功的模型 ID（fallback 时可能与 assignedModelId 不同） */
   modelId: string
+  /** 实际调用的供应商 ID */
+  providerId?: string
+  /** 实际调用的供应商名称 */
+  providerName?: string
+  /** 专家配置中原始分配的模型 ID（不受 fallback 影响） */
+  assignedModelId?: string
   /** 是否使用了回退（LLM 调用失败时降级为规则推断） */
   usedFallback: boolean
   /** 响应延迟 (ms) */
@@ -493,6 +499,9 @@ async function callExpertLLMWithFallback(
         confidence: result.confidence,
         reason: result.reason,
         modelId: candidate.modelId,
+        providerId: candidate.provider.id,
+        providerName: candidate.provider.name,
+        assignedModelId: primaryCandidate.modelId,
         usedFallback: isFallback,
         latencyMs: result.latencyMs,
       }
@@ -618,6 +627,9 @@ function buildFallbackVote(
     confidence,
     reason: `[规则降级] ${reason}`,
     modelId: expert.assignedModel?.modelId ?? 'rule-fallback',
+    providerId: expert.assignedModel?.providerId,
+    providerName: expert.assignedModel?.providerName,
+    assignedModelId: expert.assignedModel?.modelId,
     usedFallback: true,
     latencyMs,
   }

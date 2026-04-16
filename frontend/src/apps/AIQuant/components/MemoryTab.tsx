@@ -229,7 +229,7 @@ export function MemoryTab({ overview, config }: { overview: StockAnalysisOvervie
             <tbody className="divide-y divide-slate-50">
               {overview.modelGroupPerformance.map((g) => (
                 <tr key={g.group}>
-                  <td className="py-1 text-slate-700 font-medium">{formatModelGroupLabel(g.group)}</td>
+                  <td className="py-1 text-slate-700 font-medium">{formatModelGroupLabel(g.group, g.displayName)}</td>
                   <td className="py-1 text-right text-slate-500">{g.predictionCount}</td>
                   <td className="py-1 text-right font-bold text-red-600">{Math.round(g.winRate * 100)}%</td>
                   <td className="py-1 text-right text-slate-500">{g.calibration.toFixed(2)}</td>

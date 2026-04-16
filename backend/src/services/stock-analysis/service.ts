@@ -141,6 +141,7 @@ import type {
   StockAnalysisExpertPerformanceEntry,
   StockAnalysisExpertScore,
   StockAnalysisExpertStance,
+  StockAnalysisExpertVote,
   StockAnalysisLayerAssignment,
   StockAnalysisModelTestResult,
   SupportResistanceLevels,
@@ -3347,7 +3348,7 @@ export async function generateWeeklyReport(stockAnalysisDir: string): Promise<Au
 
   const modelGroupPerformance = modelGroups.length > 0
     ? modelGroups
-    : buildModelGroupPerformance(signals, expertPerformance)
+    : await buildModelGroupPerformance(stockAnalysisDir, expertPerformance)
   const fallbackDate = todayDate()
   const marketState = (await readStockAnalysisMarketState(stockAnalysisDir, fallbackDate)) ?? buildFallbackMarketState(fallbackDate)
   const dashboard = buildPerformanceDashboard(signals, watchLogs, trades, modelGroupPerformance, marketState)
@@ -3513,7 +3514,7 @@ export async function generateMonthlyReport(stockAnalysisDir: string): Promise<A
 
   const modelGroupPerformance = modelGroups.length > 0
     ? modelGroups
-    : buildModelGroupPerformance(signals, expertPerformance)
+    : await buildModelGroupPerformance(stockAnalysisDir, expertPerformance)
   const fallbackDate = todayDate()
   const marketState = (await readStockAnalysisMarketState(stockAnalysisDir, fallbackDate)) ?? buildFallbackMarketState(fallbackDate)
   const dashboard = buildPerformanceDashboard(signals, watchLogs, trades, modelGroupPerformance, marketState)
@@ -3635,60 +3636,102 @@ function buildMonthlyNarrative(
   return parts.join('\n')
 }
 
-function buildModelGroupPerformance(signals: StockAnalysisSignal[], expertPerformance?: StockAnalysisExpertPerformanceData | null): StockAnalysisModelGroupPerformance[] {
-  // 检查信号中是否有真实 LLM 投票数据
-  const allVotes = signals.flatMap((s) => s.expert.votes ?? [])
-  const hasRealVotes = allVotes.length > 0 && signals.some((s) => !s.expert.isSimulated)
+async function buildModelGroupPerformance(stockAnalysisDir: string, expertPerformance?: StockAnalysisExpertPerformanceData | null): Promise<StockAnalysisModelGroupPerformance[]> {
+  // 读取全部历史信号文件，聚合所有 votes
+  const dates = await getAvailableSignalDates(stockAnalysisDir)
+  const allSignals: StockAnalysisSignal[] = []
+  for (const date of dates) {
+    const signals = await readStockAnalysisSignals(stockAnalysisDir, date)
+    allSignals.push(...signals)
+  }
+
+  const allVotes = allSignals.flatMap((s) => s.expert.votes ?? [])
+  const hasRealVotes = allVotes.length > 0 && allSignals.some((s) => !s.expert.isSimulated)
 
   if (!hasRealVotes) {
-    // 没有真实投票数据时返回空数组（前端应显示"尚未接入 LLM"）
-    // 不再返回假数据
-    const baseConfidence = signals.length === 0 ? 0.6 : average(signals.map((signal) => signal.confidence))
+    const baseConfidence = allSignals.length === 0 ? 0.6 : average(allSignals.map((signal) => signal.confidence))
     return [
-      { group: 'rules', predictionCount: signals.length, winRate: 0, averageConfidence: round(baseConfidence), calibration: 0, weight: 1, isSimulated: true },
+      { group: 'rules', predictionCount: allSignals.length, winRate: 0, averageConfidence: round(baseConfidence), calibration: 0, weight: 1, isSimulated: true },
     ]
   }
 
-  // 从 votes 构建 expertId → modelId 映射（用于从 expert performance 中按 modelId 聚合）
-  const expertModelMap = new Map<string, string>()
-  for (const vote of allVotes) {
-    if (!expertModelMap.has(vote.expertId)) {
-      expertModelMap.set(vote.expertId, vote.modelId === 'rule-engine' ? 'rules' : vote.modelId || 'unknown')
-    }
+  // 标准化 modelId（合并大小写差异和历史遗留名称）
+  function normalizeModelId(id: string): string {
+    const lower = id.toLowerCase()
+    if (lower === 'qwen3.5-plus') return 'qwen3.6-plus'
+    return lower
   }
 
-  // 按 modelId 分组统计
-  const groupMap = new Map<string, { predictions: number; totalConfidence: number; bullishCount: number; bearishCount: number; neutralCount: number; fallbacks: number }>()
+  // 构建分组键：providerId/modelId 或仅 modelId（旧数据无 provider 时）
+  function getGroupKey(vote: StockAnalysisExpertVote): { groupKey: string; modelId: string; providerId: string; providerName: string; displayName: string } {
+    if (vote.modelId === 'rule-engine') {
+      return { groupKey: 'rules', modelId: 'rule-engine', providerId: '', providerName: '', displayName: '规则引擎' }
+    }
+    const modelId = normalizeModelId(vote.modelId || 'unknown')
+    const providerId = vote.providerId || ''
+    const providerName = vote.providerName || ''
+    const groupKey = providerId ? `${providerId}/${modelId}` : modelId
+    const displayName = providerName ? `${modelId} (${providerName})` : modelId
+    return { groupKey, modelId, providerId, providerName, displayName }
+  }
+
+  // 按 provider/model 分组统计
+  interface GroupStats {
+    predictions: number
+    totalConfidence: number
+    bullishCount: number
+    bearishCount: number
+    neutralCount: number
+    fallbacks: number
+    modelId: string
+    providerId: string
+    providerName: string
+    displayName: string
+    expertIds: Set<string>
+  }
+  const groupMap = new Map<string, GroupStats>()
 
   for (const vote of allVotes) {
-    const groupKey = vote.modelId === 'rule-engine' ? 'rules' : vote.modelId || 'unknown'
-    const existing = groupMap.get(groupKey) ?? { predictions: 0, totalConfidence: 0, bullishCount: 0, bearishCount: 0, neutralCount: 0, fallbacks: 0 }
+    const { groupKey, modelId, providerId, providerName, displayName } = getGroupKey(vote)
+    const existing = groupMap.get(groupKey) ?? {
+      predictions: 0, totalConfidence: 0, bullishCount: 0, bearishCount: 0, neutralCount: 0, fallbacks: 0,
+      modelId, providerId, providerName, displayName, expertIds: new Set<string>(),
+    }
     existing.predictions += 1
     existing.totalConfidence += vote.confidence
     if (vote.verdict === 'bullish') existing.bullishCount += 1
     else if (vote.verdict === 'bearish') existing.bearishCount += 1
     else existing.neutralCount += 1
     if (vote.usedFallback) existing.fallbacks += 1
+    existing.expertIds.add(vote.expertId)
     groupMap.set(groupKey, existing)
   }
 
-  // 从 expert performance 按 modelId 聚合真实 winRate、calibration、weight
+  // 从 expert performance 按 provider/model 聚合真实 winRate、calibration、weight
+  // 先建 expertId → groupKey 映射
+  const expertGroupMap = new Map<string, string>()
+  for (const vote of allVotes) {
+    if (!expertGroupMap.has(vote.expertId)) {
+      expertGroupMap.set(vote.expertId, getGroupKey(vote).groupKey)
+    }
+  }
+
   const modelGroupWinRates = new Map<string, { totalCorrect: number; totalPredictions: number; totalCalibration: number; totalWeight: number; expertCount: number }>()
   if (expertPerformance && expertPerformance.entries.length > 0) {
     for (const entry of expertPerformance.entries) {
-      const modelId = expertModelMap.get(entry.expertId) ?? (entry.layer === 'rule_functions' ? 'rules' : 'unknown')
-      const existing = modelGroupWinRates.get(modelId) ?? { totalCorrect: 0, totalPredictions: 0, totalCalibration: 0, totalWeight: 0, expertCount: 0 }
+      const groupKey = expertGroupMap.get(entry.expertId) ?? (entry.layer === 'rule_functions' ? 'rules' : 'unknown')
+      const existing = modelGroupWinRates.get(groupKey) ?? { totalCorrect: 0, totalPredictions: 0, totalCalibration: 0, totalWeight: 0, expertCount: 0 }
       existing.totalCorrect += entry.correctCount
       existing.totalPredictions += entry.predictionCount
       existing.totalCalibration += entry.calibration
       existing.totalWeight += entry.weight
       existing.expertCount += 1
-      modelGroupWinRates.set(modelId, existing)
+      modelGroupWinRates.set(groupKey, existing)
     }
   }
 
-  return Array.from(groupMap.entries()).map(([group, stats]) => {
-    const perfStats = modelGroupWinRates.get(group)
+  return Array.from(groupMap.entries()).map(([groupKey, stats]) => {
+    const perfStats = modelGroupWinRates.get(groupKey)
     const winRate = perfStats && perfStats.totalPredictions > 0
       ? round(perfStats.totalCorrect / perfStats.totalPredictions, 4)
       : 0
@@ -3700,7 +3743,11 @@ function buildModelGroupPerformance(signals: StockAnalysisSignal[], expertPerfor
       : 1
 
     return {
-      group,
+      group: groupKey,
+      modelId: stats.modelId,
+      providerId: stats.providerId,
+      providerName: stats.providerName,
+      displayName: stats.displayName,
       predictionCount: stats.predictions,
       winRate,
       averageConfidence: round(stats.predictions > 0 ? stats.totalConfidence / stats.predictions / 100 : 0, 4),
@@ -4171,7 +4218,7 @@ export async function runStockAnalysisDaily(stockAnalysisDir: string): Promise<S
       const evaluatedWatchLogs = await evaluateWatchLogOutcomes(stockAnalysisDir, nextWatchLogs)
       const weeklySummary = buildWeeklySummary(trades, evaluatedWatchLogs)
       const monthlySummary = buildMonthlySummary(trades, evaluatedWatchLogs)
-      const modelGroups = buildModelGroupPerformance(signals, expertPerformanceData)
+      const modelGroups = await buildModelGroupPerformance(stockAnalysisDir, expertPerformanceData)
       const performanceDashboard = buildPerformanceDashboard(signals, evaluatedWatchLogs, trades, modelGroups, marketState)
       const staleReasons = mergeStaleReasons(
         stockPoolEnvelope.staleReasons,
@@ -4881,7 +4928,7 @@ export async function getStockAnalysisOverview(stockAnalysisDir: string): Promis
   const performance = calculatePerformance(trades)
   const weeklySummary = weeklySummaryStored.length > 0 ? weeklySummaryStored : buildWeeklySummary(trades, watchLogs)
   const monthlySummary = monthlySummaryStored.length > 0 ? monthlySummaryStored : buildMonthlySummary(trades, watchLogs)
-  const modelGroupPerformance = modelGroupsStored.length > 0 ? modelGroupsStored : buildModelGroupPerformance(snapshot?.signals ?? [], expertPerformance)
+  const modelGroupPerformance = modelGroupsStored.length > 0 ? modelGroupsStored : await buildModelGroupPerformance(stockAnalysisDir, expertPerformance)
   const performanceDashboard = performanceDashboardStored ?? buildPerformanceDashboard(snapshot?.signals ?? [], watchLogs, trades, modelGroupPerformance, snapshot?.marketState ?? buildFallbackMarketState(tradeDate))
   const dataState = resolveDataState(runtimeStatus)
   const staleReasons = mergeStaleReasons(runtimeStatus.staleReasons, quoteEnvelope.staleReasons)

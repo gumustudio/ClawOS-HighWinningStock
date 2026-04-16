@@ -74,12 +74,9 @@ function safeDivide(numerator: number, denominator: number) {
   return denominator === 0 ? 0 : numerator / denominator
 }
 
-export function formatModelGroupLabel(group: string) {
+export function formatModelGroupLabel(group: string, displayName?: string) {
+  if (displayName) return displayName
   switch (group) {
-    case 'gpt': return 'GPT 组'
-    case 'claude': return 'Claude 组'
-    case 'gemini': return 'Gemini 组'
-    case 'qwen': return 'Qwen 组'
     case 'rules': return '规则函数组'
     case 'rule-engine': return '规则函数组'
     case 'rule-fallback': return '降级推断'
@@ -253,7 +250,7 @@ export function buildWeeklyDashboardSummary(overview: StockAnalysisOverview, con
     alerts.push('最大回撤已接近月度风控阈值，需减少进攻性')
   }
   if (worstGroup && worstGroup.winRate < 0.45) {
-    alerts.push(`${formatModelGroupLabel(worstGroup.group)} 连续表现偏弱，建议降低权重`)
+    alerts.push(`${formatModelGroupLabel(worstGroup.group, worstGroup.displayName)} 连续表现偏弱，建议降低权重`)
   }
 
   const regime = overview.marketRegime ?? deriveMarketRegime(overview.marketState)
@@ -278,8 +275,8 @@ export function buildWeeklyDashboardSummary(overview: StockAnalysisOverview, con
     watchAccuracy,
     tradeCount: latestWeek?.tradeCount ?? overview.recentTrades.length,
     watchDays: latestWeek?.watchDays ?? overview.watchLogs.length,
-    bestGroup: bestGroup ? formatModelGroupLabel(bestGroup.group) : null,
-    worstGroup: worstGroup ? formatModelGroupLabel(worstGroup.group) : null,
+    bestGroup: bestGroup ? formatModelGroupLabel(bestGroup.group, bestGroup.displayName) : null,
+    worstGroup: worstGroup ? formatModelGroupLabel(worstGroup.group, worstGroup.displayName) : null,
     overrideWinRate: null,
     overrideAvgReturn: null,
     overrideCount: 0,

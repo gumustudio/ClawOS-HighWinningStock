@@ -247,6 +247,10 @@ export interface StockAnalysisMonthlySummary {
 
 export interface StockAnalysisModelGroupPerformance {
   group: string
+  modelId?: string
+  providerId?: string
+  providerName?: string
+  displayName?: string
   predictionCount: number
   winRate: number
   averageConfidence: number

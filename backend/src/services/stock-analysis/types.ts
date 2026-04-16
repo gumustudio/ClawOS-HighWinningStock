@@ -138,6 +138,12 @@ export interface StockAnalysisExpertVote {
   confidence: number
   reason: string
   modelId: string
+  /** 实际调用的供应商 ID（fallback 时可能与 assignedModel 不同） */
+  providerId?: string
+  /** 实际调用的供应商名称 */
+  providerName?: string
+  /** 专家配置中原始分配的模型 ID（不受 fallback 影响） */
+  assignedModelId?: string
   usedFallback: boolean
   latencyMs: number
 }
@@ -330,7 +336,16 @@ export interface StockAnalysisWeeklySummary {
 }
 
 export interface StockAnalysisModelGroupPerformance {
+  /** 分组键，格式为 "providerId/modelId" 或 "rules" */
   group: string
+  /** 模型 ID（如 glm-5） */
+  modelId?: string
+  /** 供应商 ID */
+  providerId?: string
+  /** 供应商名称（如 Aliyun、OpenCodeGo） */
+  providerName?: string
+  /** 显示名称（如 "glm-5 (ZHIPU)"） */
+  displayName?: string
   predictionCount: number
   winRate: number
   averageConfidence: number

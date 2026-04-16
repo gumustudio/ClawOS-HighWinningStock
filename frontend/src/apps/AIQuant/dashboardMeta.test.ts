@@ -290,7 +290,9 @@ test('buildConvictionStats exposes current threshold summary', () => {
 
 test('formatModelGroupLabel formats built-in model groups', () => {
   assert.equal(formatModelGroupLabel('rules'), '规则函数组')
-  assert.equal(formatModelGroupLabel('gpt'), 'GPT 组')
+  assert.equal(formatModelGroupLabel('gpt'), 'gpt')
+  assert.equal(formatModelGroupLabel('rules', '规则函数组'), '规则函数组')
+  assert.equal(formatModelGroupLabel('ZHIPU/glm-5', 'glm-5 (ZHIPU)'), 'glm-5 (ZHIPU)')
 })
 
 test('buildDailyAdviceSummary includes proactive sell signals from positionEvaluations', () => {
