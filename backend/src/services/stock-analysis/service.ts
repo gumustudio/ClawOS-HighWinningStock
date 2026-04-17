@@ -29,6 +29,8 @@ import {
   readStockAnalysisSignals,
   readStockAnalysisStockPool,
   readStockAnalysisStockPoolMeta,
+  readAllAStockList,
+  readAllAStockListMeta,
   readStockAnalysisThresholdHistory,
   readStockAnalysisTrades,
   readStockAnalysisWatchLogs,
@@ -49,6 +51,8 @@ import {
   saveStockAnalysisSignals,
   saveStockAnalysisStockPool,
   saveStockAnalysisStockPoolMeta,
+  saveAllAStockList,
+  saveAllAStockListMeta,
   saveStockAnalysisTrades,
   saveStockAnalysisThresholdHistory,
   saveStockAnalysisWatchLogs,
@@ -307,6 +311,18 @@ except Exception as exc:
     print(json.dumps({'success': False, 'error': str(exc)}, ensure_ascii=False))
 `
 
+const ALL_A_STOCK_LIST_SCRIPT = String.raw`
+import json
+import akshare as ak
+
+try:
+    df = ak.stock_info_a_code_name()
+    rows = df[['code', 'name']].to_dict(orient='records')
+    print(json.dumps({'success': True, 'data': rows}, ensure_ascii=False))
+except Exception as exc:
+    print(json.dumps({'success': False, 'error': str(exc)}, ensure_ascii=False))
+`
+
 /** 返回北京时间（Asia/Shanghai）的日期字符串 YYYY-MM-DD */
 function todayDate() {
   return new Date().toLocaleDateString('sv', { timeZone: 'Asia/Shanghai' })
@@ -528,6 +544,59 @@ async function fetchCsi500ConstituentsFresh() {
     exchange: item.交易所,
     industryName: item.行业名称 ?? null,
   }))
+}
+
+const ALL_A_STOCK_TTL_MS = 7 * 24 * 60 * 60 * 1000 // 7 天
+
+interface PythonAllAStockItem {
+  code: string
+  name: string
+}
+
+async function fetchAllAStockListFresh(): Promise<StockAnalysisWatchlistCandidate[]> {
+  const rows = await runPythonJson<PythonAllAStockItem[]>(ALL_A_STOCK_LIST_SCRIPT)
+  return rows
+    .filter((item) => typeof item.code === 'string' && typeof item.name === 'string' && item.code.length > 0)
+    .map<StockAnalysisWatchlistCandidate>((item) => {
+      const market = getMarketFromCode(item.code)
+      const exchange = market === 'sh' ? '上交所' : market === 'bj' ? '北交所' : '深交所'
+      return {
+        code: item.code,
+        name: item.name,
+        market,
+        exchange,
+        industryName: null,
+      }
+    })
+}
+
+/**
+ * 获取 A 股全市场代码表（仅用于自选搜索）。
+ * 7 天内有缓存直接返回；过期则重新拉取并写入本地文件。
+ * 拉取失败但有旧缓存时回退旧缓存；都没有则抛错。
+ */
+async function getAllAStockList(stockAnalysisDir: string): Promise<StockAnalysisWatchlistCandidate[]> {
+  const meta = await readAllAStockListMeta(stockAnalysisDir)
+  if (isFresh(meta.refreshedAt, ALL_A_STOCK_TTL_MS)) {
+    const cached = await readAllAStockList(stockAnalysisDir)
+    if (cached.length > 0) {
+      return cached
+    }
+  }
+
+  try {
+    const fresh = await fetchAllAStockListFresh()
+    if (fresh.length > 0) {
+      await saveAllAStockList(stockAnalysisDir, fresh)
+      await saveAllAStockListMeta(stockAnalysisDir, { refreshedAt: nowIso() })
+      return fresh
+    }
+  } catch (error) {
+    console.warn('[stock-analysis] 拉取 A 股全市场列表失败，尝试回退旧缓存', error)
+  }
+
+  const fallback = await readAllAStockList(stockAnalysisDir)
+  return fallback
 }
 
 async function fetchCsi500IndexHistoryFresh() {
@@ -6501,15 +6570,37 @@ export async function getWatchlistWithQuotes(stockAnalysisDir: string): Promise<
   return { items, quotes, updatedAt: new Date().toISOString() }
 }
 
-/** 搜索股票池（模糊匹配代码或名称） */
+/** 将全角字母/数字归一化为半角，便于搜索匹配（AKShare 股票名常含全角"Ａ""Ｂ"） */
+function normalizeFullwidth(value: string): string {
+  return value.replace(/[\uFF01-\uFF5E]/g, (ch) =>
+    String.fromCharCode(ch.charCodeAt(0) - 0xFEE0),
+  )
+}
+
+/** 搜索股票池（模糊匹配代码或名称）
+ *
+ * 策略：优先用 A 股全市场代码表（~5000 只）搜索，覆盖京东方等非中证500股票。
+ * 若全市场表取不到（首次 & AKShare 失败），退回中证500股票池（500 只）保证可用。
+ */
 export async function searchStockPool(stockAnalysisDir: string, query: string): Promise<StockAnalysisWatchlistCandidate[]> {
   if (!query || query.trim().length === 0) return []
-  const pool = await readStockAnalysisStockPool(stockAnalysisDir)
-  const keyword = query.trim().toLowerCase()
-  const matched = pool.filter((stock) =>
-    stock.code.toLowerCase().includes(keyword) ||
-    stock.name.toLowerCase().includes(keyword),
-  )
+  const keyword = normalizeFullwidth(query.trim().toLowerCase())
+
+  let pool: StockAnalysisWatchlistCandidate[] = []
+  try {
+    pool = await getAllAStockList(stockAnalysisDir)
+  } catch (error) {
+    console.warn('[stock-analysis] A 股全市场表不可用，回退中证500池', error)
+  }
+  if (pool.length === 0) {
+    pool = await readStockAnalysisStockPool(stockAnalysisDir)
+  }
+
+  const matched = pool.filter((stock) => {
+    const code = stock.code.toLowerCase()
+    const name = normalizeFullwidth(stock.name.toLowerCase())
+    return code.includes(keyword) || name.includes(keyword)
+  })
   return matched.slice(0, 20)
 }
 

@@ -292,6 +292,14 @@ function getStockPoolMetaPath(stockAnalysisDir: string) {
   return path.join(stockAnalysisDir, 'cache', 'stock-pool.meta.json')
 }
 
+function getAllAStockListPath(stockAnalysisDir: string) {
+  return path.join(stockAnalysisDir, 'cache', 'a-stock-all.json')
+}
+
+function getAllAStockListMetaPath(stockAnalysisDir: string) {
+  return path.join(stockAnalysisDir, 'cache', 'a-stock-all.meta.json')
+}
+
 function getQuoteCachePath(stockAnalysisDir: string) {
   return path.join(stockAnalysisDir, 'cache', 'quotes.json')
 }
@@ -525,6 +533,24 @@ export async function readStockAnalysisStockPoolMeta(stockAnalysisDir: string) {
 
 export async function saveStockAnalysisStockPoolMeta(stockAnalysisDir: string, meta: StockAnalysisStockPoolCacheMeta) {
   await writeJson(getStockPoolMetaPath(stockAnalysisDir), meta)
+}
+
+export async function readAllAStockList(stockAnalysisDir: string) {
+  await ensureStockAnalysisStructure(stockAnalysisDir)
+  return readJson<StockAnalysisWatchlistCandidate[]>(getAllAStockListPath(stockAnalysisDir), [])
+}
+
+export async function saveAllAStockList(stockAnalysisDir: string, list: StockAnalysisWatchlistCandidate[]) {
+  await writeJson(getAllAStockListPath(stockAnalysisDir), list)
+}
+
+export async function readAllAStockListMeta(stockAnalysisDir: string) {
+  await ensureStockAnalysisStructure(stockAnalysisDir)
+  return readJson<StockAnalysisStockPoolCacheMeta>(getAllAStockListMetaPath(stockAnalysisDir), { refreshedAt: null })
+}
+
+export async function saveAllAStockListMeta(stockAnalysisDir: string, meta: StockAnalysisStockPoolCacheMeta) {
+  await writeJson(getAllAStockListMetaPath(stockAnalysisDir), meta)
 }
 
 export async function readStockAnalysisQuoteCache(stockAnalysisDir: string) {
