@@ -3820,25 +3820,31 @@ async function buildModelGroupPerformance(stockAnalysisDir: string, expertPerfor
   }
 
   // 从 expert performance 按 provider/model 聚合真实 winRate、calibration、weight
-  // 先建 expertId → groupKey 映射
-  const expertGroupMap = new Map<string, string>()
+  // 建 expertId → groupKeys 映射（一个 expert 可能被多个模型使用，需要将胜率分配给所有相关模型组）
+  const expertGroupsMap = new Map<string, Set<string>>()
   for (const vote of allVotes) {
-    if (!expertGroupMap.has(vote.expertId)) {
-      expertGroupMap.set(vote.expertId, getGroupKey(vote).groupKey)
+    const { groupKey } = getGroupKey(vote)
+    const existing = expertGroupsMap.get(vote.expertId)
+    if (existing) {
+      existing.add(groupKey)
+    } else {
+      expertGroupsMap.set(vote.expertId, new Set([groupKey]))
     }
   }
 
   const modelGroupWinRates = new Map<string, { totalCorrect: number; totalPredictions: number; totalCalibration: number; totalWeight: number; expertCount: number }>()
   if (expertPerformance && expertPerformance.entries.length > 0) {
     for (const entry of expertPerformance.entries) {
-      const groupKey = expertGroupMap.get(entry.expertId) ?? (entry.layer === 'rule_functions' ? 'rules' : 'unknown')
-      const existing = modelGroupWinRates.get(groupKey) ?? { totalCorrect: 0, totalPredictions: 0, totalCalibration: 0, totalWeight: 0, expertCount: 0 }
-      existing.totalCorrect += entry.correctCount
-      existing.totalPredictions += entry.predictionCount
-      existing.totalCalibration += entry.calibration
-      existing.totalWeight += entry.weight
-      existing.expertCount += 1
-      modelGroupWinRates.set(groupKey, existing)
+      const groupKeys = expertGroupsMap.get(entry.expertId) ?? new Set(entry.layer === 'rule_functions' ? ['rules'] : ['unknown'])
+      for (const groupKey of groupKeys) {
+        const existing = modelGroupWinRates.get(groupKey) ?? { totalCorrect: 0, totalPredictions: 0, totalCalibration: 0, totalWeight: 0, expertCount: 0 }
+        existing.totalCorrect += entry.correctCount
+        existing.totalPredictions += entry.predictionCount
+        existing.totalCalibration += entry.calibration
+        existing.totalWeight += entry.weight
+        existing.expertCount += 1
+        modelGroupWinRates.set(groupKey, existing)
+      }
     }
   }
 
