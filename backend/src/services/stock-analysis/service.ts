@@ -5,6 +5,7 @@ import { logger } from '../../utils/logger'
 import { saLog, initSALogger } from './sa-logger'
 import { runExpertVoting } from './llm-inference'
 import type { LLMExpertScore } from './llm-inference'
+import { fetchFundamentalsForCodes } from './fundamentals'
 import { callProviderText } from './llm-provider-adapter'
 import { buildExpertProfile, buildFactPoolSummary, runDailyMemoryUpdate, runLongTermMemoryUpdate } from './memory'
 import { checkTradingAvailability, getRecentTradeDates, isWithinTradingHours as isWithinTradingHoursShared } from './trading-calendar'
@@ -141,6 +142,7 @@ import type {
   StockAnalysisAIProvider,
   StockAnalysisExpertDefinition,
   StockAnalysisExpertLayer,
+  StockAnalysisExpertOutcome,
   StockAnalysisExpertPerformanceData,
   StockAnalysisExpertPerformanceEntry,
   StockAnalysisExpertScore,
@@ -173,9 +175,10 @@ import type {
   StockAnalysisPostMarketResult,
   ExpertProfile,
   ExpertMemoryStore,
+  ExpertDailyMemoryEntry,
   FactPoolSummary,
-  DataAgentConfigStore,
-  LLMExtractionAgentId,
+  StockFundamentals,
+  DataAgentConfigStore,  LLMExtractionAgentId,
   StockAnalysisOverrideStats,
   UserWatchlistItem,
   WatchlistQuoteSnapshot,
@@ -2188,7 +2191,7 @@ function calculateKellyPosition(action: string, learnedWeights?: StockAnalysisLe
   return round(Math.max(0.05, Math.min(0.2, halfKelly)), 4)
 }
 
-async function buildSignal(snapshot: StockAnalysisStockSnapshot, marketState: StockAnalysisMarketState, config: StockAnalysisStrategyConfig, learnedWeights?: StockAnalysisLearnedWeights | null, aiConfig?: StockAnalysisAIConfig | null, expertWeights?: Map<string, number>, history?: StockAnalysisKlinePoint[], profileMap?: Map<string, ExpertProfile>, factPoolSummary?: FactPoolSummary, memoryStore?: ExpertMemoryStore, eventVetoCodes?: Map<string, string>, trades?: StockAnalysisTradeRecord[]): Promise<StockAnalysisSignal> {
+async function buildSignal(snapshot: StockAnalysisStockSnapshot, marketState: StockAnalysisMarketState, config: StockAnalysisStrategyConfig, learnedWeights?: StockAnalysisLearnedWeights | null, aiConfig?: StockAnalysisAIConfig | null, expertWeights?: Map<string, number>, history?: StockAnalysisKlinePoint[], profileMap?: Map<string, ExpertProfile>, factPoolSummary?: FactPoolSummary, memoryStore?: ExpertMemoryStore, eventVetoCodes?: Map<string, string>, trades?: StockAnalysisTradeRecord[], factPool?: FactPool, fundamentals?: StockFundamentals | null): Promise<StockAnalysisSignal> {
   // 判断是否有可用的 AI 配置（至少有一个启用的 provider 和有模型分配的专家）
   const hasAI = aiConfig
     && aiConfig.providers.some((p) => p.enabled && p.apiKey)
@@ -2197,7 +2200,7 @@ async function buildSignal(snapshot: StockAnalysisStockSnapshot, marketState: St
   let expert: StockAnalysisExpertScore
   if (hasAI) {
     try {
-      const llmResult = await runExpertVoting(snapshot, marketState, aiConfig, expertWeights, profileMap, factPoolSummary, memoryStore)
+      const llmResult = await runExpertVoting(snapshot, marketState, aiConfig, expertWeights, profileMap, factPoolSummary, memoryStore, history, factPool, fundamentals ?? null)
       expert = {
         bullishCount: llmResult.bullishCount,
         bearishCount: llmResult.bearishCount,
@@ -2697,13 +2700,14 @@ async function updateExpertPerformance(
       ? Math.abs(pnlPercent) < 1 // neutral 预测 + 涨跌幅 <1% 视为正确
       : (vote.verdict === 'bullish' && pnlPercent > 0) || (vote.verdict === 'bearish' && pnlPercent < 0)
 
-    const outcome = {
+    const outcome: StockAnalysisExpertOutcome = {
       tradeDate: signalTradeDate,
       code: position.code,
       verdict: vote.verdict,
       confidence: vote.confidence,
       actualReturnPercent: round(pnlPercent),
       correct,
+      source: 'position',
     }
 
     const entry = entryMap.get(vote.expertId)
@@ -2743,6 +2747,89 @@ async function updateExpertPerformance(
 
   await saveStockAnalysisExpertPerformance(stockAnalysisDir, updatedData)
   logger.debug(`[stock-analysis] updateExpertPerformance: 更新了 ${buySignalVotes.length} 个专家的表现记录 (pnl=${pnlPercent}%)`, { module: 'StockAnalysis' })
+}
+
+/**
+ * [v1.33.0 阶段 D] 双轨胜率统计：扫描最近交易日的 daily-memories，
+ * 累加每位专家未处理日期的 1d（actualReturnNextDay）和 5d（actualReturn5d）结果。
+ * 使用 predictionStatsUpdatedAt 作为游标防止重复累加。
+ */
+export async function updateExpertPredictionStats(
+  stockAnalysisDir: string,
+  tradeDate: string,
+): Promise<void> {
+  // 扫描最近 10 个交易日（覆盖 T-5 回填窗口 + 缓冲）
+  const recentDates = getRecentTradeDates(tradeDate, 10)
+  if (recentDates.length === 0) return
+
+  const existing = await readStockAnalysisExpertPerformance(stockAnalysisDir)
+  const entryMap = new Map(existing.entries.map((e) => [e.expertId, e]))
+
+  // 按专家分组：{ expertId → Array<{ date, entry }> }
+  // 为了保证顺序可预测，按日期升序处理
+  const sortedDates = [...recentDates].sort() // 升序：旧→新
+
+  let totalDelta1d = 0
+  let totalDelta5d = 0
+
+  for (const date of sortedDates) {
+    let dayEntries: ExpertDailyMemoryEntry[]
+    try {
+      dayEntries = await readExpertDailyMemories(stockAnalysisDir, date)
+    } catch {
+      continue
+    }
+    if (dayEntries.length === 0) continue
+
+    for (const mem of dayEntries) {
+      const entry = entryMap.get(mem.expertId)
+      if (!entry) continue // 专家必须已存在（由 updateExpertPerformance 创建），否则跳过
+
+      // 游标：只处理 predictionStatsUpdatedAt 之后的日期
+      const cursor = entry.predictionStatsUpdatedAt ?? ''
+      if (date <= cursor) continue
+
+      // 1d 累加（仅当已回填）
+      if (mem.actualReturnNextDay !== null && mem.actualReturnNextDay !== undefined
+          && mem.wasCorrect !== null && mem.wasCorrect !== undefined) {
+        entry.predictionCount1d = (entry.predictionCount1d ?? 0) + 1
+        if (mem.wasCorrect) entry.correctCount1d = (entry.correctCount1d ?? 0) + 1
+        else entry.correctCount1d = entry.correctCount1d ?? 0
+        entry.winRate1d = round(entry.correctCount1d / entry.predictionCount1d, 4)
+        totalDelta1d++
+      }
+
+      // 5d 累加（仅当已回填）
+      if (mem.actualReturn5d !== null && mem.actualReturn5d !== undefined
+          && mem.wasCorrect5d !== null && mem.wasCorrect5d !== undefined) {
+        entry.predictionCount5d = (entry.predictionCount5d ?? 0) + 1
+        if (mem.wasCorrect5d) entry.correctCount5d = (entry.correctCount5d ?? 0) + 1
+        else entry.correctCount5d = entry.correctCount5d ?? 0
+        entry.winRate5d = round(entry.correctCount5d / entry.predictionCount5d, 4)
+        totalDelta5d++
+      }
+    }
+  }
+
+  // 推进所有专家的游标到 tradeDate（即使今日无增量也要推进，避免下次重扫）
+  // 但只对已有 1d 或 5d 样本的专家更新，避免污染未参与预测的专家
+  for (const entry of entryMap.values()) {
+    const has1d = (entry.predictionCount1d ?? 0) > 0
+    const has5d = (entry.predictionCount5d ?? 0) > 0
+    if (has1d || has5d) {
+      entry.predictionStatsUpdatedAt = tradeDate
+    }
+  }
+
+  const updatedData: StockAnalysisExpertPerformanceData = {
+    updatedAt: nowIso(),
+    entries: Array.from(entryMap.values()),
+  }
+  await saveStockAnalysisExpertPerformance(stockAnalysisDir, updatedData)
+  logger.info(
+    `[stock-analysis] updateExpertPredictionStats: 累加 ${totalDelta1d} 条 1d 结果 / ${totalDelta5d} 条 5d 结果 (tradeDate=${tradeDate})`,
+    { module: 'StockAnalysis' },
+  )
 }
 
 /** 计算单个专家的动态权重：基于胜率 + 时间衰减 */
@@ -3002,6 +3089,9 @@ async function evaluatePositionScores(
   factPoolSummary?: FactPoolSummary,
   memoryStore?: ExpertMemoryStore,
   learnedWeights?: StockAnalysisLearnedWeights | null,
+  history?: StockAnalysisKlinePoint[],
+  factPool?: FactPool,
+  fundamentals?: StockFundamentals | null,
 ): Promise<StockAnalysisPositionEvaluation> {
   // 判断是否有可用的 AI 配置
   const hasAI = aiConfig
@@ -3011,7 +3101,7 @@ async function evaluatePositionScores(
   let expert: StockAnalysisExpertScore
   if (hasAI) {
     try {
-      const llmResult = await runExpertVoting(snapshot, marketState, aiConfig, expertWeights, profileMap, factPoolSummary, memoryStore)
+      const llmResult = await runExpertVoting(snapshot, marketState, aiConfig, expertWeights, profileMap, factPoolSummary, memoryStore, history, factPool, fundamentals ?? null)
       expert = {
         bullishCount: llmResult.bullishCount,
         bearishCount: llmResult.bearishCount,
@@ -4229,6 +4319,7 @@ export async function runStockAnalysisDaily(stockAnalysisDir: string): Promise<S
       // Phase 5.5: 加载专家记忆系统 + 构建性能档案 + FactPool 摘要（注入 LLM prompt）
       let profileMap: Map<string, ExpertProfile> | undefined
       let factPoolSummary: FactPoolSummary | undefined
+      let factPoolForExperts: FactPool | undefined
       let memoryStore: ExpertMemoryStore | undefined
       try {
         // 构建专家性能档案（基于已加载的 expertPerformanceData）
@@ -4250,6 +4341,7 @@ export async function runStockAnalysisDaily(stockAnalysisDir: string): Promise<S
         const previousFactPool = await readFactPool(stockAnalysisDir, prevTradeDate)
         if (previousFactPool) {
           factPoolSummary = buildFactPoolSummary(previousFactPool)
+          factPoolForExperts = previousFactPool
           logger.info(`[stock-analysis] 已构建 FactPool 摘要（数据 agent: ${previousFactPool.agentLogs.length}）`, { module: 'StockAnalysis' })
         }
       } catch (error) {
@@ -4273,9 +4365,16 @@ export async function runStockAnalysisDaily(stockAnalysisDir: string): Promise<S
       if (positionsFull) {
         logger.info(`[stock-analysis] 持仓已满 (${currentPositions.length}/${config.maxPositions})，新信号使用公式评分（仅用于换仓比较）`, { module: 'StockAnalysis' })
       }
+      // [v1.33.0 阶段 E] 预取候选池 + 持仓股的基本面（PE/PB/ROE/总市值），带当日缓存
+      const fundamentalsTargetCodes = Array.from(new Set([
+        ...candidatePool.map((s) => s.code),
+        ...currentPositions.map((p) => p.code),
+      ]))
+      const fundamentalsMap = await fetchFundamentalsForCodes(stockAnalysisDir, fundamentalsTargetCodes)
+      logger.info(`[stock-analysis] 基本面数据就绪：目标 ${fundamentalsTargetCodes.length} 只，命中 ${fundamentalsMap.size} 只`, { module: 'StockAnalysis' })
       const signalResults = await runLimitedConcurrency(candidatePool, 3, async (snapshot, index) => {
         await markRunState(stockAnalysisDir, 'running', { startedAt: nowIso(), phase: 'signals', processedCount: index, totalCount: candidatePool.length })
-        return buildSignal(snapshot, marketState, config, learnedWeights, positionsFull ? null : aiConfig, expertWeightsMap, historyMap.get(snapshot.code), profileMap, factPoolSummary, memoryStore, eventVetoCodes, tradesForKelly)
+        return buildSignal(snapshot, marketState, config, learnedWeights, positionsFull ? null : aiConfig, expertWeightsMap, historyMap.get(snapshot.code), profileMap, factPoolSummary, memoryStore, eventVetoCodes, tradesForKelly, factPoolForExperts, fundamentalsMap.get(snapshot.code) ?? null)
       })
       const signals = signalResults.sort((left, right) => right.finalScore - left.finalScore)
 
@@ -4296,7 +4395,7 @@ export async function runStockAnalysisDaily(stockAnalysisDir: string): Promise<S
             // P2-D6: 默认值改为 65（buy/watch 分界线），避免高默认值导致虚假 scoreDelta 下降
             const buyCompositeScore = buySignal?.compositeScore ?? 65
             const buyFinalScore = buySignal?.finalScore ?? buyCompositeScore
-            const evaluation = await evaluatePositionScores(position, posSnapshot, marketState, config, buyCompositeScore, buyFinalScore, aiConfig, expertWeightsMap, profileMap, factPoolSummary, memoryStore, learnedWeights)
+            const evaluation = await evaluatePositionScores(position, posSnapshot, marketState, config, buyCompositeScore, buyFinalScore, aiConfig, expertWeightsMap, profileMap, factPoolSummary, memoryStore, learnedWeights, historyMap.get(position.code), factPoolForExperts, fundamentalsMap.get(position.code) ?? null)
             positionEvaluations.push(evaluation)
 
             if (evaluation.sellRecommended) {
@@ -4460,6 +4559,9 @@ export async function runStockAnalysisPostMarket(
       if (currentPositions.length > 0) {
         const existingSignals = await getStockAnalysisSignals(stockAnalysisDir)
         const signalMap = new Map(existingSignals.map((signal) => [signal.id, signal]))
+        // [v1.33.0 阶段 E] 盘后持仓评估也预取基本面
+        const postFundamentalsMap = await fetchFundamentalsForCodes(stockAnalysisDir, currentPositions.map((p) => p.code))
+        logger.info(`[stock-analysis] [盘后] 基本面数据就绪：目标 ${currentPositions.length} 只，命中 ${postFundamentalsMap.size} 只`, { module: 'StockAnalysis' })
 
         for (const position of currentPositions) {
           assertWithinPostMarketWindow(postMarketStart, maxDurationMs, `Phase 2 持仓评估 ${position.code} 前`)
@@ -4483,7 +4585,7 @@ export async function runStockAnalysisPostMarket(
             const buySignal = position.sourceSignalId ? signalMap.get(position.sourceSignalId) : null
             const buyCompositeScore = buySignal?.compositeScore ?? 65
             const buyFinalScore = buySignal?.finalScore ?? buyCompositeScore
-            const evaluation = await evaluatePositionScores(position, posSnapshot, marketState, config, buyCompositeScore, buyFinalScore, postMarketAiConfig)
+            const evaluation = await evaluatePositionScores(position, posSnapshot, marketState, config, buyCompositeScore, buyFinalScore, postMarketAiConfig, undefined, undefined, undefined, undefined, undefined, posHistoryEnvelope.data, undefined, postFundamentalsMap.get(position.code) ?? null)
             positionEvaluations.push(evaluation)
 
             if (evaluation.sellRecommended) {
@@ -4552,6 +4654,12 @@ export async function runStockAnalysisPostMarket(
         const previousTradeDate = recentDatesForMem.length >= 2 ? recentDatesForMem[1] : tradeDate
         await runDailyMemoryUpdate(stockAnalysisDir, tradeDate, previousTradeDate, memoryAiConfig)
         logger.info(`[stock-analysis] [盘后] 专家记忆更新完成: ${tradeDate}`, { module: 'StockAnalysis' })
+        // [v1.33.0 阶段 D] 双轨胜率统计：累加 daily-memories 中已回填的 1d/5d 结果
+        try {
+          await updateExpertPredictionStats(stockAnalysisDir, tradeDate)
+        } catch (error) {
+          logger.error(`[stock-analysis] [盘后] 双轨胜率统计失败（不影响盘后结果）: ${(error as Error).message}`)
+        }
       } catch (error) {
         logger.error(`[stock-analysis] [盘后] 专家记忆更新失败（不影响盘后结果）: ${(error as Error).message}`)
       }

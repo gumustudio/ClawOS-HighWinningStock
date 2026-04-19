@@ -52,6 +52,28 @@ export function buildFactPoolSummary(factPool: FactPool): FactPoolSummary {
   return { macroSummary, policySummary, announcementHighlights, industryHighlights, sentimentSummary, globalMarketSummary, moneyFlowSummary }
 }
 
+/**
+ * 阶段 C：构建个股视角的 FactPool 摘要。
+ * - 公告部分只突出该股票自身公告，并补充全局重要公告作为 context
+ * - 行业新闻部分只突出该股票所在板块相关新闻
+ * - 其他字段（宏观/政策/舆情/全球/资金）仍然全局共享
+ */
+export function buildFactPoolSummaryForStock(
+  factPool: FactPool,
+  stockCode: string,
+  sector: string | null | undefined,
+): FactPoolSummary {
+  const macroSummary = buildMacroSummary(factPool)
+  const policySummary = buildPolicySummary(factPool)
+  const announcementHighlights = buildAnnouncementHighlightsForStock(factPool, stockCode)
+  const industryHighlights = buildIndustryHighlightsForStock(factPool, sector)
+  const sentimentSummary = buildSentimentSummary(factPool)
+  const globalMarketSummary = buildGlobalMarketSummary(factPool)
+  const moneyFlowSummary = buildMoneyFlowSummary(factPool)
+
+  return { macroSummary, policySummary, announcementHighlights, industryHighlights, sentimentSummary, globalMarketSummary, moneyFlowSummary }
+}
+
 function buildMacroSummary(factPool: FactPool): string | null {
   const m = factPool.macroData
   if (!m) return null
@@ -84,11 +106,71 @@ function buildAnnouncementHighlights(factPool: FactPool): string[] {
   return selected.slice(0, 5).map((a) => `${a.name}: ${a.title}`)
 }
 
+/**
+ * 阶段 C：个股专属公告——优先返回该股票自己的公告（标注「本股」），
+ * 若不足 5 条，再补上其他 major 级别的公告（标注「全局」）。
+ */
+function buildAnnouncementHighlightsForStock(factPool: FactPool, stockCode: string): string[] {
+  const items = factPool.companyAnnouncements
+  if (items.length === 0) return []
+
+  const normalize = (code: string) => code.replace(/^(sh|sz|bj)/i, '').trim()
+  const targetCode = normalize(stockCode)
+
+  const own: string[] = []
+  const othersMajor: string[] = []
+
+  for (const a of items) {
+    const line = `${a.name}: ${a.title}`
+    if (normalize(a.code) === targetCode) {
+      own.push(`【本股】${line}`)
+    } else if (a.importance === 'major') {
+      othersMajor.push(`【其他】${line}`)
+    }
+  }
+
+  const combined = [...own]
+  for (const entry of othersMajor) {
+    if (combined.length >= 5) break
+    combined.push(entry)
+  }
+  return combined
+}
+
 function buildIndustryHighlights(factPool: FactPool): string[] {
   const items = factPool.industryNews
   if (items.length === 0) return []
 
   return items.slice(0, 5).map((n) => n.title)
+}
+
+/**
+ * 阶段 C：个股专属行业新闻——优先返回 sectors 字段包含该股票板块的新闻（标注「本行业」），
+ * 若不足 5 条，再补其他新闻（标注「其他行业」）。
+ */
+function buildIndustryHighlightsForStock(factPool: FactPool, sector: string | null | undefined): string[] {
+  const items = factPool.industryNews
+  if (items.length === 0) return []
+
+  const sectorKey = (sector ?? '').trim()
+  if (!sectorKey) {
+    return items.slice(0, 5).map((n) => n.title)
+  }
+
+  const own: string[] = []
+  const others: string[] = []
+  for (const n of items) {
+    const match = (n.sectors ?? []).some((s) => s.includes(sectorKey) || sectorKey.includes(s))
+    if (match) own.push(`【本行业】${n.title}`)
+    else others.push(`【其他行业】${n.title}`)
+  }
+
+  const combined = [...own]
+  for (const entry of others) {
+    if (combined.length >= 5) break
+    combined.push(entry)
+  }
+  return combined
 }
 
 function buildSentimentSummary(factPool: FactPool): string | null {
@@ -366,10 +448,13 @@ export async function runDailyMemoryUpdate(
       logger.info(`${logTag} 写入 ${todayEntries.length} 条当日记忆条目 (${tradeDate})`, { module: 'StockAnalysis' })
     }
 
-    // Step 2: 回填前一日结果
+    // Step 2: 回填前一日结果（1d 口径）
     if (previousTradeDate) {
       await backfillPreviousDayResults(stockAnalysisDir, previousTradeDate, signals)
     }
+
+    // Step 2b: [v1.33.0 阶段 D] 回填 T-5 交易日的 5d 收益口径
+    await backfill5dResults(stockAnalysisDir, tradeDate, signals)
 
     // Step 3 & 4: 更新 memory-store（短期 + 中期压缩）
     await updateMemoryStore(stockAnalysisDir, tradeDate, aiConfig)
@@ -472,6 +557,82 @@ async function backfillPreviousDayResults(
   if (updated > 0) {
     await saveExpertDailyMemories(stockAnalysisDir, previousTradeDate, prevEntries)
     logger.info(`[memory] 回填 ${updated} 条前日记忆结果 (${previousTradeDate})`, { module: 'StockAnalysis' })
+  }
+}
+
+/**
+ * [v1.33.0 阶段 D] 回填 T-5 交易日预测的 5d 收益口径。
+ * 读取 5 个交易日前的 daily-memories，对每一条未回填 actualReturn5d 的条目：
+ *   - 读取 T 日的 signals 获取基准收盘价 (signal.latestPrice)
+ *   - 今日 signals/quote cache 提供 T+5 收盘价
+ *   - 计算相对收益并判断正误（阈值与 1d 相同：neutral |return|<0.5%，否则看方向）
+ */
+async function backfill5dResults(
+  stockAnalysisDir: string,
+  todayTradeDate: string,
+  todaySignals: StockAnalysisSignal[],
+): Promise<void> {
+  // 计算 T-5（按交易日历）
+  // getRecentTradeDates 返回 [T, T-1, T-2, ...] 所以取 index=5
+  const recentDates = getRecentTradeDates(todayTradeDate, 7)
+  if (recentDates.length < 6) return
+  const targetDate = recentDates[5] // T-5
+
+  const targetEntries = await readExpertDailyMemories(stockAnalysisDir, targetDate)
+  if (targetEntries.length === 0) return
+
+  // 只处理还没回填 5d 的条目
+  const pending = targetEntries.filter((e) => e.actualReturn5d === undefined || e.actualReturn5d === null)
+  if (pending.length === 0) return
+
+  // 今日价格表
+  const todayPriceMap = new Map<string, number>()
+  for (const s of todaySignals) {
+    if (s.latestPrice > 0) todayPriceMap.set(s.code, s.latestPrice)
+  }
+  const missingCodes = new Set<string>()
+  for (const e of pending) {
+    if (!todayPriceMap.has(e.code)) missingCodes.add(e.code)
+  }
+  if (missingCodes.size > 0) {
+    try {
+      const cache = await readStockAnalysisQuoteCache(stockAnalysisDir)
+      if (cache?.quotes) {
+        for (const q of cache.quotes) {
+          if (missingCodes.has(q.code) && q.latestPrice > 0) {
+            todayPriceMap.set(q.code, q.latestPrice)
+          }
+        }
+      }
+    } catch {
+      // 静默降级
+    }
+  }
+
+  // T-5 日基准价格表
+  const baseSignals = await readStockAnalysisSignals(stockAnalysisDir, targetDate)
+  const basePriceMap = new Map<string, number>()
+  for (const s of baseSignals) {
+    if (s.latestPrice > 0) basePriceMap.set(s.code, s.latestPrice)
+  }
+
+  let updated = 0
+  for (const entry of pending) {
+    const todayPrice = todayPriceMap.get(entry.code)
+    const basePrice = basePriceMap.get(entry.code)
+    if (!todayPrice || !basePrice || basePrice <= 0) continue
+
+    const return5d = ((todayPrice - basePrice) / basePrice) * 100
+    entry.actualReturn5d = return5d
+    entry.wasCorrect5d = (entry.verdict === 'bullish' && return5d > 0)
+      || (entry.verdict === 'bearish' && return5d < 0)
+      || (entry.verdict === 'neutral' && Math.abs(return5d) < 0.5)
+    updated++
+  }
+
+  if (updated > 0) {
+    await saveExpertDailyMemories(stockAnalysisDir, targetDate, targetEntries)
+    logger.info(`[memory] 回填 ${updated} 条 T-5 记忆结果 (targetDate=${targetDate})`, { module: 'StockAnalysis' })
   }
 }
 
@@ -1116,7 +1277,9 @@ export const _testing = {
   buildMacroSummary,
   buildPolicySummary,
   buildAnnouncementHighlights,
+  buildAnnouncementHighlightsForStock,
   buildIndustryHighlights,
+  buildIndustryHighlightsForStock,
   buildSentimentSummary,
   buildGlobalMarketSummary,
   buildMoneyFlowSummary,
@@ -1131,4 +1294,5 @@ export const _testing = {
   parseLongTermResponse,
   mergeLongTermMemory,
   buildLongTermStatistical,
+  backfill5dResults,
 }

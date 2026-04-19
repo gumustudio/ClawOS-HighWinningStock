@@ -15,19 +15,23 @@ import {
   buildMemoryContext,
   formatExpertProfileForPrompt,
   formatFactPoolSummaryForPrompt,
+  buildFactPoolSummaryForStock,
 } from './memory'
 import { callProviderText } from './llm-provider-adapter'
 import type {
   ExpertMemoryStore,
   ExpertProfile,
+  FactPool,
   FactPoolSummary,
   StockAnalysisAIConfig,
   StockAnalysisAIProvider,
   StockAnalysisExpertDefinition,
   StockAnalysisExpertLayer,
   StockAnalysisExpertStance,
+  StockAnalysisKlinePoint,
   StockAnalysisMarketState,
   StockAnalysisStockSnapshot,
+  StockFundamentals,
 } from './types'
 
 const UNSUPPORTED_CANDIDATES = new Set([
@@ -107,11 +111,16 @@ const LAYER_PROMPTS: Record<Exclude<StockAnalysisExpertLayer, 'rule_functions'>,
   buy_side: '你是一位买方机构投资经理。请从组合配置、风险收益比、持仓周期、资金管理等角度评估是否值得买入该股票。',
 }
 
-/** 立场引导文本 */
+/**
+ * v1.33.0 P1-3：立场引导重写
+ * 旧版本"倾向偏乐观/偏谨慎"会让 LLM 带着预设结论分析，投票相关性极高。
+ * 新版本仅指定"审视视角"——关注点不同，但结论必须由数据驱动。
+ * 同一份数据，机会发现者可能看到上涨空间，风险识别者可能看到下行风险，两者都可能正确。
+ */
 const STANCE_GUIDE: Record<StockAnalysisExpertStance, string> = {
-  bullish: '你的分析倾向偏乐观（看多），但必须基于事实做出诚实判断，如果数据明确看空也应该如实表达。',
-  bearish: '你的分析倾向偏谨慎（看空），但必须基于事实做出诚实判断，如果数据明确看多也应该如实表达。',
-  neutral: '你保持完全中立的立场，纯粹基于数据和事实做出判断。',
+  bullish: '你的审视视角偏向"机会发现"：优先识别上涨催化、潜在利好、估值修复空间。但分析必须完全基于事实，数据明确指向风险时应诚实给出 bearish/neutral，不得为"偏多"而强行看多。',
+  bearish: '你的审视视角偏向"风险识别"：优先关注下行风险、估值过热、负面催化。但分析必须完全基于事实，数据明确指向机会时应诚实给出 bullish/neutral，不得为"偏空"而强行看空。',
+  neutral: '你以平衡视角审视机会与风险，不偏向任何预设结论，完全基于数据做出判断。',
 }
 
 /**
@@ -160,16 +169,181 @@ function getDataSections(
 /** technical 是 price + ma + volume 的复合别名 */
 const TECHNICAL_ALIAS = ['price', 'ma', 'volume']
 
+/**
+ * v1.33.0 P0-1：构建「必读技术指标」块（RSI/MACD/ATR/产业强度等）。
+ * 这些指标在 snapshot 里已经算好但此前没塞进 prompt。全专家强制可见，
+ * 不走 infoSubset 过滤——因为它们是判断多空/波动的基础信号，任何专家都应该看到。
+ */
+function buildIndicatorBlock(snapshot: StockAnalysisStockSnapshot): string[] {
+  const lines: string[] = []
+  const fmt = (v: number | null | undefined, digits = 2): string => {
+    if (v === null || v === undefined || Number.isNaN(v)) return 'N/A'
+    return v.toFixed(digits)
+  }
+
+  // RSI：0-100，>70 超买 / <30 超卖
+  lines.push(`- RSI14：${fmt(snapshot.rsi14, 1)}（>70 超买、<30 超卖）`)
+  // MACD：line / signal / histogram
+  lines.push(`- MACD：DIF=${fmt(snapshot.macdLine, 3)}，DEA=${fmt(snapshot.macdSignal, 3)}，柱=${fmt(snapshot.macdHistogram, 3)}（柱>0 金叉区、柱<0 死叉区）`)
+  // ATR：波动区间（绝对值 + 相对价格百分比）
+  lines.push(`- ATR14：${fmt(snapshot.atr14, 2)}，占价比：${fmt(snapshot.atrPercent, 2)}%（日内波动幅度）`)
+  // 支撑/压力相对位置
+  if (snapshot.distanceToResistance1 !== null && snapshot.distanceToResistance1 !== undefined) {
+    lines.push(`- 距上方压力：${fmt(snapshot.distanceToResistance1, 2)}%，距下方支撑：${fmt(snapshot.distanceToSupport1, 2)}%`)
+  }
+  // 均线斜率（趋势强度）
+  lines.push(`- MA20 斜率：${fmt(snapshot.movingAverage20Slope, 3)}，MA60 斜率：${fmt(snapshot.movingAverage60Slope, 3)}（正=上行趋势）`)
+  // 产业链相对强度
+  if (snapshot.industryStrength !== null && snapshot.industryStrength !== undefined) {
+    lines.push(`- 产业强度：${fmt(snapshot.industryStrength, 2)}，广度：${fmt(snapshot.industryBreadth, 2)}，20日行业涨幅：${fmt(snapshot.industryReturn20d, 2)}%，行业趋势强度：${fmt(snapshot.industryTrendStrength, 2)}`)
+  }
+  return lines
+}
+
+/**
+ * v1.33.0 阶段 E：公司基本面块（PE/PB/总市值/ROE）。
+ * 字段可能为 null（数据源未返回），null 时不输出该行，避免误导 LLM。
+ * 全专家强制可见——估值和盈利能力是基本面专家的核心输入，技术派专家也应了解估值水位。
+ */
+function buildFundamentalsBlock(fundamentals: StockFundamentals | null | undefined): string[] {
+  if (!fundamentals) return []
+  const lines: string[] = []
+  const fmt = (v: number | null, digits = 2): string => {
+    if (v === null || v === undefined || Number.isNaN(v)) return 'N/A'
+    return v.toFixed(digits)
+  }
+  if (fundamentals.peRatio !== null) {
+    lines.push(`- 市盈率 TTM：${fmt(fundamentals.peRatio, 2)}（<0 亏损、15-25 正常、>40 高估、<10 可能被低估）`)
+  }
+  if (fundamentals.pbRatio !== null) {
+    lines.push(`- 市净率：${fmt(fundamentals.pbRatio, 2)}（<1 破净，>3 偏高）`)
+  }
+  if (fundamentals.totalMarketCapYi !== null) {
+    lines.push(`- 总市值：${fmt(fundamentals.totalMarketCapYi, 2)} 亿元`)
+  }
+  if (fundamentals.roePercent !== null) {
+    lines.push(`- ROE：${fmt(fundamentals.roePercent, 2)}%（>15 优秀、5-15 一般、<5 偏弱、<0 亏损）`)
+  }
+  if (lines.length === 0) return []
+  lines.push(`- 数据源：${fundamentals.source}，抓取日：${fundamentals.fetchedDate}`)
+  return lines
+}
+
+/**
+ * v1.33.0 P0-2：将近 30 日 K 线压缩成 prompt 可消化的摘要。
+ * 策略：取最近 30 根，输出 4 部分：
+ *   1) 统计概览（均价、最高最低、总涨跌幅、平均换手）
+ *   2) 近 10 日逐日简报（OHLC + 量）
+ *   3) 早期 20 日折叠为 5 段摘要（每 4 根一段）
+ *   4) 关键形态识别（连涨/连跌天数、最大单日振幅）
+ * 目标 token ≈ 800-1200（约 1500-2000 中文字符）。
+ * 全专家强制可见，因为 K 线是所有技术判断的共同基础。
+ */
+function buildKlineSummary(history: StockAnalysisKlinePoint[] | undefined): string[] {  if (!history || history.length === 0) return []
+  const lines: string[] = []
+  // 取最近 30 根，时间升序
+  const recent = history.slice(-30)
+  if (recent.length < 5) {
+    // 太少数据不值得做摘要
+    return []
+  }
+
+  // ---- 1. 统计概览 ----
+  const closes = recent.map((p) => p.close)
+  const highs = recent.map((p) => p.high)
+  const lows = recent.map((p) => p.low)
+  const volumes = recent.map((p) => p.volume)
+  const turnoverRates = recent.map((p) => p.turnoverRate)
+  const avgClose = closes.reduce((s, v) => s + v, 0) / closes.length
+  const maxHigh = Math.max(...highs)
+  const minLow = Math.min(...lows)
+  const firstClose = recent[0].close
+  const lastClose = recent[recent.length - 1].close
+  const totalReturn = firstClose > 0 ? ((lastClose - firstClose) / firstClose) * 100 : 0
+  const avgTurnover = turnoverRates.reduce((s, v) => s + v, 0) / turnoverRates.length
+  const avgVolume = volumes.reduce((s, v) => s + v, 0) / volumes.length
+
+  lines.push(`- 区间：${recent[0].date} 至 ${recent[recent.length - 1].date}（共 ${recent.length} 根）`)
+  lines.push(`- 均价：${avgClose.toFixed(2)}，最高：${maxHigh.toFixed(2)}，最低：${minLow.toFixed(2)}`)
+  lines.push(`- 区间总涨跌：${totalReturn >= 0 ? '+' : ''}${totalReturn.toFixed(2)}%，平均换手：${avgTurnover.toFixed(2)}%`)
+
+  // ---- 2. 早期 20 日折叠（每 4 根合并为一段摘要）----
+  const earlyCount = Math.max(0, recent.length - 10)
+  if (earlyCount >= 4) {
+    const early = recent.slice(0, earlyCount)
+    const chunkSize = 4
+    const chunkLines: string[] = []
+    for (let i = 0; i < early.length; i += chunkSize) {
+      const chunk = early.slice(i, i + chunkSize)
+      if (chunk.length === 0) continue
+      const chunkOpen = chunk[0].open
+      const chunkClose = chunk[chunk.length - 1].close
+      const chunkHigh = Math.max(...chunk.map((p) => p.high))
+      const chunkLow = Math.min(...chunk.map((p) => p.low))
+      const chunkChg = chunkOpen > 0 ? ((chunkClose - chunkOpen) / chunkOpen) * 100 : 0
+      const chunkAvgVol = chunk.reduce((s, p) => s + p.volume, 0) / chunk.length
+      const volRatio = avgVolume > 0 ? chunkAvgVol / avgVolume : 1
+      chunkLines.push(
+        `  · ${chunk[0].date}~${chunk[chunk.length - 1].date}：开${chunkOpen.toFixed(2)} 收${chunkClose.toFixed(2)} 高${chunkHigh.toFixed(2)} 低${chunkLow.toFixed(2)} 涨幅${chunkChg >= 0 ? '+' : ''}${chunkChg.toFixed(2)}% 量比${volRatio.toFixed(2)}`,
+      )
+    }
+    if (chunkLines.length > 0) {
+      lines.push(`- 早期走势（每 4 日合并）：`)
+      lines.push(...chunkLines)
+    }
+  }
+
+  // ---- 3. 近 10 日逐日简报 ----
+  const latest = recent.slice(-10)
+  lines.push(`- 近 ${latest.length} 日逐日（日期/开/收/高/低/涨跌%/换手%）：`)
+  for (const p of latest) {
+    lines.push(
+      `  · ${p.date} ${p.open.toFixed(2)}/${p.close.toFixed(2)}/${p.high.toFixed(2)}/${p.low.toFixed(2)} ${p.changePercent >= 0 ? '+' : ''}${p.changePercent.toFixed(2)}% 换手${p.turnoverRate.toFixed(2)}%`,
+    )
+  }
+
+  // ---- 4. 关键形态 ----
+  // 连涨/连跌天数（从最后一根往前数）
+  let consecUp = 0
+  let consecDown = 0
+  for (let i = recent.length - 1; i >= 0; i--) {
+    if (recent[i].changePercent > 0) {
+      if (consecDown > 0) break
+      consecUp++
+    } else if (recent[i].changePercent < 0) {
+      if (consecUp > 0) break
+      consecDown++
+    } else {
+      break
+    }
+  }
+  const maxAmp = Math.max(...recent.map((p) => p.amplitude))
+  const maxAmpDate = recent.find((p) => p.amplitude === maxAmp)?.date ?? ''
+  const formBits: string[] = []
+  if (consecUp >= 2) formBits.push(`近期连涨 ${consecUp} 日`)
+  if (consecDown >= 2) formBits.push(`近期连跌 ${consecDown} 日`)
+  formBits.push(`区间最大振幅 ${maxAmp.toFixed(2)}%（${maxAmpDate}）`)
+  lines.push(`- 形态特征：${formBits.join('，')}`)
+
+  return lines
+}
+
 function buildStockContext(
   snapshot: StockAnalysisStockSnapshot,
   marketState: StockAnalysisMarketState,
   infoSubset?: string[],
+  history?: StockAnalysisKlinePoint[],
+  fundamentals?: StockFundamentals | null,
 ): string {
   const sections = getDataSections(snapshot, marketState)
+  // v1.33.0：必读块（不受 infoSubset 过滤，所有专家都能看到）
+  const indicatorLines = buildIndicatorBlock(snapshot)
+  const klineLines = buildKlineSummary(history)
+  const fundamentalsLines = buildFundamentalsBlock(fundamentals)
 
   // 没有指定 infoSubset 或为空数组时，返回全部数据（向后兼容）
   if (!infoSubset || infoSubset.length === 0) {
-    return [
+    const parts: string[] = [
       `## 股票信息`,
       ...sections.basic,
       ``,
@@ -179,9 +353,19 @@ function buildStockContext(
       ...sections.volume,
       ...sections.volatility,
       ``,
+      `## 必读核心指标`,
+      ...indicatorLines,
+      ``,
       `## 市场环境`,
       ...sections.market,
-    ].join('\n')
+    ]
+    if (klineLines.length > 0) {
+      parts.push(``, `## 近 30 日 K 线摘要`, ...klineLines)
+    }
+    if (fundamentalsLines.length > 0) {
+      parts.push(``, `## 公司基本面`, ...fundamentalsLines)
+    }
+    return parts.join('\n')
   }
 
   // 展开 technical 别名
@@ -220,6 +404,17 @@ function buildStockContext(
   if (resolvedKeys.has('market')) {
     lines.push(`## 市场环境`)
     lines.push(...sections.market)
+    lines.push(``)
+  }
+
+  // v1.33.0：必读核心指标 + K 线摘要 + 基本面（强制可见，不受 infoSubset 控制）
+  lines.push(`## 必读核心指标`)
+  lines.push(...indicatorLines)
+  if (klineLines.length > 0) {
+    lines.push(``, `## 近 30 日 K 线摘要`, ...klineLines)
+  }
+  if (fundamentalsLines.length > 0) {
+    lines.push(``, `## 公司基本面`, ...fundamentalsLines)
   }
 
   return lines.join('\n')
@@ -274,15 +469,21 @@ function buildExpertUserMessage(
   marketState: StockAnalysisMarketState,
   factPoolSummary?: FactPoolSummary,
   memoryStore?: ExpertMemoryStore,
+  history?: StockAnalysisKlinePoint[],
+  factPool?: FactPool,
+  fundamentals?: StockFundamentals | null,
 ): string {
-  const stockContext = buildStockContext(snapshot, marketState, expert.infoSubset)
+  const stockContext = buildStockContext(snapshot, marketState, expert.infoSubset, history, fundamentals)
 
   const sections: string[] = [stockContext]
 
-  // 注入 FactPool 摘要
+  // 注入 FactPool 摘要——阶段 C：若提供了 factPool 原始对象，则按个股视角重建 summary
   let factPoolText = ''
-  if (factPoolSummary) {
-    factPoolText = formatFactPoolSummaryForPrompt(factPoolSummary) ?? ''
+  const effectiveSummary = factPool
+    ? buildFactPoolSummaryForStock(factPool, snapshot.code, snapshot.sector)
+    : factPoolSummary
+  if (effectiveSummary) {
+    factPoolText = formatFactPoolSummaryForPrompt(effectiveSummary) ?? ''
     if (factPoolText) {
       sections.push(`\n## 宏观与市场情报\n${factPoolText}`)
     }
@@ -446,9 +647,12 @@ async function callExpertLLMWithFallback(
   profile?: ExpertProfile,
   factPoolSummary?: FactPoolSummary,
   memoryStore?: ExpertMemoryStore,
+  history?: StockAnalysisKlinePoint[],
+  factPool?: FactPool,
+  fundamentals?: StockFundamentals | null,
 ): Promise<ExpertVote> {
   const systemMessage = buildExpertSystemMessage(expert, profile)
-  const userMessage = buildExpertUserMessage(expert, snapshot, marketState, factPoolSummary, memoryStore)
+  const userMessage = buildExpertUserMessage(expert, snapshot, marketState, factPoolSummary, memoryStore, history, factPool, fundamentals)
 
   // 构造尝试顺序：主候选 → fallback 候选（去掉与主候选重复的）
   const allCandidates: LLMCandidate[] = [primaryCandidate]
@@ -590,33 +794,77 @@ function validateLLMResponse(raw: Record<string, unknown>): LLMResponse {
   return { verdict, confidence, reason }
 }
 
-/** LLM 调用失败时，基于专家立场和市场数据推断一个合理的投票 */
+/**
+ * v1.33.0 P1-3：LLM 调用失败时的规则降级推断。
+ * 旧版本强依赖 stance（bullish 专家优先给 bullish、bearish 专家优先给 bearish），
+ * 导致规则降级样本彼此高度相关、投票失去多样性。
+ *
+ * 新版本：纯粹用技术信号累计得分（无视 stance），给出 verdict。
+ * 为保留画像差异，stance 只影响 confidence 的微小偏置（±5），不影响 verdict 方向。
+ */
 function buildFallbackVote(
   expert: StockAnalysisExpertDefinition,
   snapshot: StockAnalysisStockSnapshot,
   latencyMs: number,
 ): ExpertVote {
-  let verdict: ExpertVote['verdict']
-  let confidence: number
-  let reason: string
+  // ==== 多空信号累计评分 ====
+  let score = 0
+  const reasons: string[] = []
 
-  // 基于立场和市场数据做简单推断
-  const bullishSignal = snapshot.return20d > 0 && snapshot.latestPrice > snapshot.movingAverage20
-  const bearishSignal = snapshot.return20d < -5 && snapshot.declineDays20d > 5
+  // 1) 20 日收益：主要趋势
+  if (snapshot.return20d > 5) { score += 2; reasons.push('20日涨') }
+  else if (snapshot.return20d > 0) { score += 1 }
+  else if (snapshot.return20d < -5) { score -= 2; reasons.push('20日跌') }
+  else if (snapshot.return20d < 0) { score -= 1 }
 
-  if (expert.stance === 'bullish') {
-    verdict = bullishSignal ? 'bullish' : bearishSignal ? 'bearish' : 'neutral'
-    confidence = bullishSignal ? 60 : 40
-    reason = bullishSignal ? '趋势向好，立场偏多' : '数据偏弱，谨慎观望'
-  } else if (expert.stance === 'bearish') {
-    verdict = bearishSignal ? 'bearish' : bullishSignal ? 'bullish' : 'neutral'
-    confidence = bearishSignal ? 60 : 40
-    reason = bearishSignal ? '下行趋势明确，谨慎' : '数据尚可，但需关注风险'
-  } else {
-    verdict = bullishSignal ? 'bullish' : bearishSignal ? 'bearish' : 'neutral'
-    confidence = 50
-    reason = '中性立场，基于数据研判'
+  // 2) 价格相对 MA20
+  if (snapshot.latestPrice > snapshot.movingAverage20) score += 1
+  else if (snapshot.latestPrice < snapshot.movingAverage20) score -= 1
+
+  // 3) MA20 斜率：趋势强度
+  if (snapshot.movingAverage20Slope > 0.05) { score += 1; reasons.push('MA20上行') }
+  else if (snapshot.movingAverage20Slope < -0.05) { score -= 1; reasons.push('MA20下行') }
+
+  // 4) 连跌天数
+  if (snapshot.declineDays20d > 5) { score -= 2; reasons.push(`连跌${snapshot.declineDays20d}日`) }
+  else if (snapshot.declineDays20d > 3) score -= 1
+
+  // 5) RSI 超买超卖（有数据时）
+  if (snapshot.rsi14 !== null && snapshot.rsi14 !== undefined) {
+    if (snapshot.rsi14 > 75) { score -= 1; reasons.push('RSI超买') }
+    else if (snapshot.rsi14 < 25) { score += 1; reasons.push('RSI超卖') }
   }
+
+  // 6) MACD 柱方向
+  if (snapshot.macdHistogram !== null && snapshot.macdHistogram !== undefined) {
+    if (snapshot.macdHistogram > 0) score += 0.5
+    else if (snapshot.macdHistogram < 0) score -= 0.5
+  }
+
+  // 7) 产业链相对强度（有数据时）
+  if (snapshot.industryStrength !== null && snapshot.industryStrength !== undefined) {
+    if (snapshot.industryStrength > 0.7) { score += 0.5; reasons.push('行业强') }
+    else if (snapshot.industryStrength < 0.3) { score -= 0.5; reasons.push('行业弱') }
+  }
+
+  // ==== verdict 决策（纯数据驱动，不依赖 stance） ====
+  let verdict: ExpertVote['verdict']
+  if (score >= 2) verdict = 'bullish'
+  else if (score <= -2) verdict = 'bearish'
+  else verdict = 'neutral'
+
+  // ==== confidence：|score| 映射到 35-70，stance 仅做微小偏置以保留画像差异 ====
+  const baseConf = Math.min(70, 35 + Math.abs(score) * 6)
+  let stanceBias = 0
+  if (expert.stance === 'bullish' && verdict === 'bullish') stanceBias = 5
+  else if (expert.stance === 'bearish' && verdict === 'bearish') stanceBias = 5
+  else if (expert.stance === 'bullish' && verdict === 'bearish') stanceBias = -3
+  else if (expert.stance === 'bearish' && verdict === 'bullish') stanceBias = -3
+  const confidence = Math.max(20, Math.min(80, Math.round(baseConf + stanceBias)))
+
+  const reason = reasons.length > 0
+    ? `规则降级判断：${reasons.slice(0, 3).join('、')}`
+    : `规则降级判断：信号中性（score=${score.toFixed(1)}）`
 
   return {
     expertId: expert.id,
@@ -625,7 +873,7 @@ function buildFallbackVote(
     stance: expert.stance,
     verdict,
     confidence,
-    reason: `[规则降级] ${reason}`,
+    reason,
     modelId: expert.assignedModel?.modelId ?? 'rule-fallback',
     providerId: expert.assignedModel?.providerId,
     providerName: expert.assignedModel?.providerName,
@@ -825,6 +1073,9 @@ export async function runExpertVoting(
   profileMap?: Map<string, ExpertProfile>,
   factPoolSummary?: FactPoolSummary,
   memoryStore?: ExpertMemoryStore,
+  history?: StockAnalysisKlinePoint[],
+  factPool?: FactPool,
+  fundamentals?: StockFundamentals | null,
 ): Promise<LLMExpertScore> {
   const votingStart = Date.now()
   const enabledExperts = aiConfig.experts.filter((e) => e.enabled)
@@ -850,6 +1101,9 @@ export async function runExpertVoting(
       llmExperts, providerMap, snapshot, marketState,
       profileMap, factPoolSummary, memoryStore,
       EXPERT_VOTING_TIMEOUT_MS,
+      history,
+      factPool,
+      fundamentals,
     )
   } catch (error) {
     logger.warn(`[llm-inference] ${(error as Error).message}，使用规则降级填充全部 LLM 专家`)
@@ -881,6 +1135,9 @@ async function runLLMWithFallback(
   factPoolSummary?: FactPoolSummary,
   memoryStore?: ExpertMemoryStore,
   overallTimeoutMs = EXPERT_VOTING_TIMEOUT_MS,
+  history?: StockAnalysisKlinePoint[],
+  factPool?: FactPool,
+  fundamentals?: StockFundamentals | null,
 ): Promise<ExpertVote[]> {
   // 按 providerId 分组
   const groups = new Map<string, { expert: StockAnalysisExpertDefinition; originalIndex: number }[]>()
@@ -962,6 +1219,9 @@ async function runLLMWithFallback(
               profileMap?.get(expert.id),
               factPoolSummary,
               memoryStore,
+              history,
+              factPool,
+              fundamentals,
             )
           } finally {
             releaseGlobalSlot()
@@ -1112,6 +1372,9 @@ export const _testing = {
   buildFallbackCandidates,
   parseLLMResponse,
   buildStockContext,
+  buildIndicatorBlock,
+  buildKlineSummary,
+  buildFundamentalsBlock,
   buildExpertSystemMessage,
   buildExpertUserMessage,
   isUnsupportedCandidate,

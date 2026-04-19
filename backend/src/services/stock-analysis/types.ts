@@ -714,6 +714,16 @@ export interface StockAnalysisExpertPerformanceEntry {
   lastPredictionDate: string
   /** 最近预测结果（用于衰减计算），最多保留 50 条 */
   recentOutcomes: StockAnalysisExpertOutcome[]
+  /** [v1.33.0 阶段 D] 基于次日收益（T+1 收盘）的胜率统计——独立于持仓卖出胜率 */
+  predictionCount1d?: number
+  correctCount1d?: number
+  winRate1d?: number
+  /** [v1.33.0 阶段 D] 基于 T+5 收益的胜率统计 */
+  predictionCount5d?: number
+  correctCount5d?: number
+  winRate5d?: number
+  /** [v1.33.0 阶段 D] 双轨统计最后更新日（避免重复累加） */
+  predictionStatsUpdatedAt?: string
 }
 
 export interface StockAnalysisExpertOutcome {
@@ -725,6 +735,8 @@ export interface StockAnalysisExpertOutcome {
   actualReturnPercent: number
   /** 预测是否正确 */
   correct: boolean
+  /** [v1.33.0 阶段 D] 数据来源：position=持仓卖出 pnl，nextday=次日收益，fiveday=T+5 收益 */
+  source?: 'position' | 'nextday' | 'fiveday'
 }
 
 export interface StockAnalysisExpertPerformanceData {
@@ -1232,8 +1244,12 @@ export interface ExpertDailyMemoryEntry {
   reason: string
   /** T+1 实际收益率（盘后回填，未回填时为 null） */
   actualReturnNextDay: number | null
-  /** 预测是否正确（回填，未回填时为 null） */
+  /** T+1 预测是否正确（回填，未回填时为 null） */
   wasCorrect: boolean | null
+  /** [v1.33.0 阶段 D] T+5 实际收益率（预测日收盘 → T+5 日收盘，未回填时为 null） */
+  actualReturn5d?: number | null
+  /** [v1.33.0 阶段 D] T+5 口径下预测是否正确（未回填时为 null） */
+  wasCorrect5d?: boolean | null
 }
 
 /** 短期记忆：最近 5 个交易日的详细预测+结果 */
@@ -1367,3 +1383,23 @@ export interface WatchlistResponse {
   quotes: Record<string, WatchlistQuoteSnapshot>
   updatedAt: string
 }
+
+/** [v1.33.0 阶段 E] 股票基本面快照（PE/PB/总市值/ROE） */
+export interface StockFundamentals {
+  code: string
+  /** 市盈率 TTM */
+  peRatio: number | null
+  /** 市净率 */
+  pbRatio: number | null
+  /** 总市值（亿元） */
+  totalMarketCapYi: number | null
+  /** ROE 百分比 */
+  roePercent: number | null
+  /** 数据抓取日（YYYY-MM-DD），用于过夜失效判断 */
+  fetchedDate: string
+  /** 抓取时间戳（ISO） */
+  fetchedAt: string
+  /** 数据源 */
+  source: 'tencent' | 'fallback'
+}
+
