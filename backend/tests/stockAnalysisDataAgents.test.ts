@@ -107,8 +107,13 @@ test('shouldReportGlobalIndexError returns false when Eastmoney source itself is
 })
 
 test('createAgentResult treats partial data as partial success instead of zero', () => {
+  // v1.35.0 [A1-P0-4] 公式调整：errors 权重 ×10，防止源故障被高 dataPointCount 稀释
+  // 1 dataPoint + 2 errors × 10 = 21 → successRate = 1/21 ≈ 0.0476
+  // 虽然数值偏低，但明显 > 0（partial success 的语义仍然成立）
   const result = createAgentResult('macro_economy', Date.now() - 5, 1, ['AKShare-macro 失败', 'AKShare-lpr 失败'])
-  assert.equal(result.successRate, 1 / 3)
+  assert.ok(result.successRate > 0, 'partial data 应有非零成功率')
+  assert.ok(result.successRate < 0.1, '但 2 个源失败时成功率应明显被压低')
+  assert.equal(result.successRate, 1 / 21)
 })
 
 test('computeChangePercentFromSeries skips null gaps and uses latest two valid closes', () => {
@@ -162,7 +167,9 @@ test('applyFactPoolBackups restores macro snapshot when live macro data is nearl
   assert.equal(macroResult.data?.gdpGrowth, 4.9)
   assert.equal(macroResult.log.dataPointCount, 6)
   assert.ok(macroResult.log.errors.some((item) => item.includes('已回退到最近成功宏观快照(2026-04-09)')))
-  assert.equal(macroResult.log.successRate, 6 / 8)
+  // v1.35.0 [A1-P0-4] 新公式：6 dataPoint + 2 errors × 10 = 26 → 6/26 ≈ 0.23
+  // 1 个原错误 + 1 个回退告示，仍有源故障未解除，successRate 不应接近 1
+  assert.equal(macroResult.log.successRate, 6 / 26)
 })
 
 test('applyFactPoolBackups restores social sentiment and preserves audit error', () => {
@@ -188,7 +195,8 @@ test('applyFactPoolBackups restores social sentiment and preserves audit error',
   assert.equal(sentimentResult.data.length, 3)
   assert.ok(sentimentResult.log.errors.includes('微博舆情报告无数据'))
   assert.ok(sentimentResult.log.errors.some((item) => item.includes('已回退到最近成功社交舆情快照(2026-04-09)')))
-  assert.equal(sentimentResult.log.successRate, 3 / 5)
+  // v1.35.0 [A1-P0-4] 新公式：3 dataPoint + 2 errors × 10 = 23 → 3/23
+  assert.equal(sentimentResult.log.successRate, 3 / 23)
 })
 
 test('applyFactPoolBackups restores global markets when live snapshot is empty', () => {
@@ -215,5 +223,6 @@ test('applyFactPoolBackups restores global markets when live snapshot is empty',
   assert.equal(globalResult.log.dataPointCount, 4)
   assert.ok(globalResult.log.errors.includes('所有全球市场数据源均失败'))
   assert.ok(globalResult.log.errors.some((item) => item.includes('已回退到最近成功全球市场快照(2026-04-09)')))
-  assert.equal(globalResult.log.successRate, 4 / 6)
+  // v1.35.0 [A1-P0-4] 新公式：4 dataPoint + 2 errors × 10 = 24 → 4/24
+  assert.equal(globalResult.log.successRate, 4 / 24)
 })

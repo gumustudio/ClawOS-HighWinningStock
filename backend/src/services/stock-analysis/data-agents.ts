@@ -275,20 +275,53 @@ async function trySource<T>(sourceName: string, agentId: DataAgentId, fn: () => 
 
 // ==================== Agent 运行器 ====================
 
-function createAgentResult(agentId: DataAgentId, startMs: number, dataPointCount: number, errors: string[]): DataAgentResult {
-  const denominator = dataPointCount + errors.length
+/**
+ * v1.35.0 [A1-P0-4] successRate 计算口径修正。
+ *
+ * 旧版 bug：successRate = dataPointCount / (dataPointCount + errors.length)。
+ * 5 个源 4 个宕机、1 个返回 100 条时，successRate = 100/(100+4) ≈ 96%，完全掩盖源级故障。
+ *
+ * 新版：优先使用"源级成功率"——sourceSuccesses / sourceAttempts（如 1/5 = 20%）。
+ * 调用方未传源数时退化到旧口径（向后兼容），但在这种情况下 errors.length 权重提升
+ * （每条 error 等效 10 个数据点），让 successRate 对源故障更敏感。
+ *
+ * dataPointCount 仅作展示，不再作为成功率的"分母"。
+ */
+interface AgentResultOptions {
+  /** 尝试调用的数据源总数（含成功和失败）。传了就按此算 successRate。 */
+  sourceAttempts?: number
+  /** 至少返回 1 条数据或未抛错的数据源数量。 */
+  sourceSuccesses?: number
+}
+
+function createAgentResult(
+  agentId: DataAgentId,
+  startMs: number,
+  dataPointCount: number,
+  errors: string[],
+  options?: AgentResultOptions,
+): DataAgentResult {
   return {
     agentId,
     collectedAt: nowIso(),
     dataPointCount,
-    successRate: computeSuccessRate(dataPointCount, errors.length),
+    successRate: computeSuccessRate(dataPointCount, errors.length, options),
     elapsedMs: Date.now() - startMs,
     errors,
   }
 }
 
-function computeSuccessRate(dataPointCount: number, errorCount: number): number {
-  const denominator = dataPointCount + errorCount
+function computeSuccessRate(dataPointCount: number, errorCount: number, options?: AgentResultOptions): number {
+  // v1.35.0 [A1-P0-4] 优先用源级成功率
+  if (options && typeof options.sourceAttempts === 'number' && options.sourceAttempts > 0) {
+    const successes = typeof options.sourceSuccesses === 'number'
+      ? Math.max(0, Math.min(options.sourceAttempts, options.sourceSuccesses))
+      : Math.max(0, options.sourceAttempts - errorCount)
+    return successes / options.sourceAttempts
+  }
+  // 向后兼容的旧口径，但把 error 权重提高到 10 个数据点的等效负权，避免 90%+ 虚高
+  const ERROR_WEIGHT = 10
+  const denominator = dataPointCount + errorCount * ERROR_WEIGHT
   return denominator === 0 ? 0 : Math.max(0, dataPointCount / denominator)
 }
 

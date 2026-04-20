@@ -438,6 +438,24 @@ export async function validateAndSyncCalendarOnStartup(): Promise<void> {
     }
   }
 
+  // v1.35.0 [A1-P0-3] 跨年回溯预加载：1-3 月需要上一年的数据做近 N 日 K 线回溯
+  // 启动时若当前为 1-3 月，主动同步 / 加载上一年缓存，避免 getRecentTradeDates 降级到可能过时的静态数据
+  if (month <= 2) { // 0=Jan, 1=Feb, 2=Mar
+    const prevYear = year - 1
+    const hasPrevYear = onlineTradeDatesCache.has(prevYear) && onlineTradeDatesCache.get(prevYear)!.size > 0
+    if (!hasPrevYear) {
+      logger.info(`当前为 1-3 月，预加载 ${prevYear} 年交易日历用于跨年 K 线回溯...`, { module: MODULE })
+      const diskLoadedPrev = await loadOnlineCacheFromDisk(prevYear)
+      if (!diskLoadedPrev) {
+        try {
+          await syncOnlineTradingCalendar(prevYear)
+        } catch (err) {
+          logger.warn(`${prevYear} 年日历预加载失败（将降级使用静态数据）: ${(err as Error).message}`, { module: MODULE })
+        }
+      }
+    }
+  }
+
   logger.info(`交易日历自检完成: 今天 ${todayStr} ${todayIsTrading ? '是' : '不是'}交易日`, { module: MODULE })
 }
 
@@ -560,15 +578,26 @@ export function checkTradingAvailability(date?: Date): { canTrade: boolean; reas
  * 获取近 N 个交易日期字符串（跳过周末 + 中国法定节假日，支持调休补班日）。
  * 从 tradeDate 当日开始往前回溯。
  * [L10] 使用 while 循环替代固定上限，确保长假期也能正确回溯。
+ *
+ * v1.35.0 [A1-P0-3] 跨年懒加载：回溯时若遇到未加载在线缓存的年份，触发磁盘缓存加载
+ * （不阻塞：如果加载失败仍降级到静态数据）。
  */
 export function getRecentTradeDates(tradeDate: string, count: number): string[] {
   const dates: string[] = []
   const current = new Date(tradeDate)
   const MAX_ITERATIONS = Math.max(count * 5, 30) // 安全上限，至少 30 次（覆盖国庆等长假）
+  const triedLoadYears = new Set<number>() // 防止重复尝试加载同一年
 
   let iterations = 0
   while (dates.length < count && iterations < MAX_ITERATIONS) {
     iterations++
+    const year = current.getFullYear()
+    // v1.35.0 [A1-P0-3] 懒加载：年份未在在线缓存中时，触发磁盘加载（fire-and-forget，不阻塞主循环）
+    if (!onlineTradeDatesCache.has(year) && !triedLoadYears.has(year)) {
+      triedLoadYears.add(year)
+      // 异步加载磁盘缓存，本次调用仍用静态数据，但下次调用即可命中
+      loadOnlineCacheFromDisk(year).catch(() => { /* 静默失败 */ })
+    }
     const dateStr = formatDateStr(current)
     if (isTradingDay(current)) {
       dates.push(dateStr)

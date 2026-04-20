@@ -5112,9 +5112,20 @@ function buildFallbackMarketState(tradeDate: string): StockAnalysisMarketState {
   }
 }
 
+/**
+ * v1.35.0 [A4-P0-3] T+1 时区统一：openedAt 是 UTC ISO，todayDate() 是北京日期。
+ * 旧版 openedAt.slice(0, 10) 直接取 UTC 日期字符串，在北京时间 00:00-07:59 区间（UTC 前一天 16:00-23:59）
+ * 会比北京 today 少一天，导致 T+1 校验失效（可同日卖出）。
+ * 修复：把 openedAt 正确转成北京日期再比对。
+ * 同时优先使用 position.openDate（写入时已用北京日期，更可靠）。
+ */
 function assertPositionCanSellToday(position: StockAnalysisPosition) {
-  const openedDate = position.openedAt.slice(0, 10)
-  const tradeToday = todayDate()
+  const tradeToday = todayDate() // Asia/Shanghai YYYY-MM-DD
+  // 优先使用 openDate（写入时的北京日期快照），其次用 openedAt 转北京时区
+  let openedDate = position.openDate
+  if (!openedDate || !/^\d{4}-\d{2}-\d{2}$/.test(openedDate)) {
+    openedDate = new Date(position.openedAt).toLocaleDateString('sv', { timeZone: 'Asia/Shanghai' })
+  }
   if (openedDate === tradeToday) {
     throw new Error(`A股 T+1 限制：${position.name}(${position.code}) 于 ${openedDate} 买入，当天不可卖出`)
   }

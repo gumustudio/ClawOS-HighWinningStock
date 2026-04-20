@@ -64,10 +64,12 @@ test('parseTencentQtFundamentals：parts < 50 返回 null', () => {
 
 test('parseTencentQtFundamentals：正确解析 PE/PB/总市值/ROE', () => {
   // 构造一行有 75+ 字段的模拟数据
+  // v1.35.0: 必须满足哨兵校验——parts[1] 中文名 + parts[3] 正数价格
   const parts = new Array(80).fill('')
   parts[0] = 'v_sh600519="1'
   parts[1] = '贵州茅台'
   parts[2] = '600519'
+  parts[3] = '1600.00' // v1.35.0 哨兵：最新价
   parts[39] = '23.45' // PE
   parts[44] = '20000.5' // 总市值（亿）
   parts[46] = '8.12' // PB
@@ -85,8 +87,11 @@ test('parseTencentQtFundamentals：正确解析 PE/PB/总市值/ROE', () => {
 })
 
 test('parseTencentQtFundamentals：数字字段为空时解析为 null', () => {
+  // v1.35.0: 必须满足哨兵校验——parts[1] 中文名 + parts[3] 正数价格
   const parts = new Array(80).fill('')
+  parts[1] = '贵州茅台'
   parts[2] = '600519'
+  parts[3] = '1600.00'
   parts[39] = '' // PE 缺失
   parts[44] = '20000.5'
   parts[46] = '8.12'

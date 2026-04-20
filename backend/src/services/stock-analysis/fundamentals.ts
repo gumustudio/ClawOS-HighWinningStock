@@ -84,22 +84,61 @@ function parseNum(s: string | undefined): number | null {
  *
  * 字段索引参考（社区验证 + 项目实测）：
  *   0: v_{symbol}="1 (前缀，跳过)
+ *   1: 股票名称（中文，须含 CJK 字符，用作哨兵）
  *   2: 代码
+ *   3: 最新价（数值，哨兵）
  *   39: 市盈率 TTM
  *   44: 总市值（亿元）
  *   46: 市净率
  *   74: ROE(%)
+ *
+ * v1.35.0 [A1-P0-1/2] 加入哨兵校验：
+ *   - parts[1] 必须含中文字符（防止字段错位后把代码/数字当名称）
+ *   - parts[3] 必须是正数（防止错位后把名称当价格）
+ *   - parts[39]（PE）合理范围 -200 ~ 2000（亏损股允许负 PE，但极端值视为错位）
+ *   - parts[46]（PB）合理范围 0 ~ 100
+ *   - 任一哨兵失败返回 null 并打印 warn，让外层走 fallback 源
  */
+const CJK_REGEX = /[\u3400-\u4dbf\u4e00-\u9fff]/
+
 export function parseTencentQtFundamentals(rawLine: string): StockFundamentals | null {
   const parts = rawLine.split('~')
   if (parts.length < 50) return null
   const code = parts[2]
   if (!/^\d{6}$/.test(code)) return null
+
+  // v1.35.0 [A1-P0-1/2] 哨兵 1：股票名称必须含中文字符（防止 GBK 解码错误导致字段错位）
+  const name = parts[1] ?? ''
+  if (!CJK_REGEX.test(name)) {
+    logger.warn(`[fundamentals] parseTencentQt 哨兵失败 code=${code}: 名称字段无中文字符（疑似字段错位或编码损坏）`, { module: MODULE })
+    return null
+  }
+
+  // v1.35.0 [A1-P0-1/2] 哨兵 2：最新价必须为正数
+  const latestPrice = parseNum(parts[3])
+  if (latestPrice === null || latestPrice <= 0) {
+    logger.warn(`[fundamentals] parseTencentQt 哨兵失败 code=${code}: 最新价字段非法 (${parts[3]})`, { module: MODULE })
+    return null
+  }
+
+  // v1.35.0 [A1-P0-1/2] 哨兵 3：PE/PB 合理性校验（字段漂移检测）
+  const rawPe = parseNum(parts[39])
+  const rawPb = parseNum(parts[46])
+  if (rawPe !== null && (rawPe < -200 || rawPe > 2000)) {
+    logger.warn(`[fundamentals] parseTencentQt 哨兵失败 code=${code}: PE 超出合理范围 (${rawPe})，疑似字段漂移`, { module: MODULE })
+    return null
+  }
+  if (rawPb !== null && (rawPb < 0 || rawPb > 100)) {
+    logger.warn(`[fundamentals] parseTencentQt 哨兵失败 code=${code}: PB 超出合理范围 (${rawPb})，疑似字段漂移`, { module: MODULE })
+    return null
+  }
+
   return {
     code,
-    peRatio: parseNum(parts[39]),
+    // v1.35.0 [A1-P1-4] PE=0 视为不适用（亏损股），转 null 避免 LLM 误读
+    peRatio: rawPe !== null && rawPe > 0 ? rawPe : null,
     totalMarketCapYi: parseNum(parts[44]),
-    pbRatio: parseNum(parts[46]),
+    pbRatio: rawPb !== null && rawPb > 0 ? rawPb : null,
     roePercent: parts.length > 74 ? parseNum(parts[74]) : null,
     fetchedDate: formatDateStr(new Date()),
     fetchedAt: new Date().toISOString(),
@@ -125,9 +164,10 @@ async function fetchBatchFromTencent(codes: string[]): Promise<Map<string, Stock
       logger.warn(`[fundamentals] Tencent qt HTTP ${resp.status}`, { module: MODULE })
       return result
     }
-    // Tencent qt 返回 GBK 编码的中文名，但我们只用数字字段，忽略文本部分即可
+    // v1.35.0 [A1-P0-1] Tencent qt 返回 GBK 编码，必须用 TextDecoder('gbk') 正确解码。
+    // 旧版本用 'binary' (latin1) 解码导致中文含特殊字节时与 ~ 冲突，产生字段错位。
     const buffer = await resp.arrayBuffer()
-    const text = Buffer.from(buffer).toString('binary')
+    const text = new TextDecoder('gbk').decode(buffer)
     const lines = text.split('\n').map((l) => l.trim()).filter((l) => l.length > 0)
     for (const line of lines) {
       const parsed = parseTencentQtFundamentals(line)
