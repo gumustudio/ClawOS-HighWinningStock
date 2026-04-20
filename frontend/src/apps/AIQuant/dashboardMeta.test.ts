@@ -30,6 +30,8 @@ const baseOverview: StockAnalysisOverview = {
     averageTurnover20d: 120000000000,
     risingRatio: 0.52,
   },
+  marketRegime: 'normal_range',
+  fusionWeights: { expert: 0.35, technical: 0.35, quant: 0.3 },
   stats: {
     stockPoolSize: 500,
     candidatePoolSize: 3,
@@ -41,6 +43,7 @@ const baseOverview: StockAnalysisOverview = {
     weeklyReturn: 1.2,
     winRate: 0.45,
     maxDrawdown: -3.2,
+    maxPositions: 3,
   },
   topSignals: [
     {
@@ -67,6 +70,9 @@ const baseOverview: StockAnalysisOverview = {
         return5d: 3,
         return20d: 8,
         return60d: 10,
+        return120d: 12,
+        momentumRank20d: 0.82,
+        momentumRank60d: 0.77,
         volumeBreakout: 1.4,
         volatility20d: 22,
         volatilityRank: 0.3,
@@ -74,6 +80,22 @@ const baseOverview: StockAnalysisOverview = {
         movingAverage5: 18,
         movingAverage20: 17,
         movingAverage60: 16,
+        movingAverage120: 15,
+        movingAverage20Slope: 0.8,
+        movingAverage60Slope: 0.6,
+        rsi14: 61,
+        macdLine: 0.52,
+        macdSignal: 0.41,
+        macdHistogram: 0.11,
+        atr14: 0.68,
+        atrPercent: 3.64,
+        distanceToResistance1: 4.2,
+        distanceToSupport1: 3.1,
+        industryStrength: 0.72,
+        industryBreadth: 0.66,
+        industryReturn20d: 7.2,
+        industryReturn60d: 12.5,
+        industryTrendStrength: 0.74,
         scoreReason: ['成交额达标'],
       },
       expert: { bullishCount: 32, bearishCount: 12, neutralCount: 6, consensus: 0.72, score: 80, highlights: ['专家分歧较小'], risks: ['暂无明显风险'] },
@@ -81,9 +103,10 @@ const baseOverview: StockAnalysisOverview = {
         asOfDate: '2026-04-02', trend: 'range_bound', volatility: 'normal_volatility', liquidity: 'normal_liquidity', sentiment: 'neutral', style: 'balanced', csi500Return20d: 1.2, annualizedVolatility20d: 18, averageTurnover20d: 120000000000, risingRatio: 0.52,
       },
       thresholds: { minCompositeScore: 76, minExpertConsensus: 0.63, minTechnicalScore: 70, minQuantScore: 65 },
-      technical: { total: 78, absolute: 75, relative: 77, sector: 81, notes: ['突破 20 日高点'] },
-      quant: { total: 71, momentum: 74, volumeBreakout: 72, volatility: 68, liquidity: 70, value: 65, notes: ['动量因子强势'] },
+      technical: { total: 78, trend: 79, momentumConfirmation: 80, structure: 76, participation: 77, risk: 78, absolute: 75, relative: 77, sector: 81, notes: ['突破 20 日高点'] },
+      quant: { total: 71, mediumTermMomentum: 73, crossSectionalStrength: 72, liquidityQuality: 69, stability: 70, meanReversion: 68, momentum: 74, volumeBreakout: 72, volatility: 68, liquidity: 70, value: 65, notes: ['动量因子强势'] },
       compositeScore: 79,
+      scoreBonus: 3,
       finalScore: 82,
       action: 'buy',
       suggestedPosition: 0.25,
@@ -108,15 +131,16 @@ const baseOverview: StockAnalysisOverview = {
       latestPrice: 24.2,
       sector: '成长科技',
       snapshot: {
-        code: '300789', name: '测试观望', market: 'sz', exchange: '深交所', sector: '成长科技', latestPrice: 24.2, changePercent: 1.2, turnoverRate: 2.1, totalMarketCap: 2000000000, circulatingMarketCap: 1500000000, averageTurnoverAmount20d: 180000000, amplitude20d: 5.5, declineDays20d: 3, return5d: 2, return20d: 4, return60d: 6, volumeBreakout: 1.1, volatility20d: 25, volatilityRank: 0.5, pricePosition20d: 0.62, movingAverage5: 23.8, movingAverage20: 23.5, movingAverage60: 22.5, scoreReason: ['量能一般'] },
+        code: '300789', name: '测试观望', market: 'sz', exchange: '深交所', sector: '成长科技', latestPrice: 24.2, changePercent: 1.2, turnoverRate: 2.1, totalMarketCap: 2000000000, circulatingMarketCap: 1500000000, averageTurnoverAmount20d: 180000000, amplitude20d: 5.5, declineDays20d: 3, return5d: 2, return20d: 4, return60d: 6, return120d: 8, momentumRank20d: 0.61, momentumRank60d: 0.57, volumeBreakout: 1.1, volatility20d: 25, volatilityRank: 0.5, pricePosition20d: 0.62, movingAverage5: 23.8, movingAverage20: 23.5, movingAverage60: 22.5, movingAverage120: 21.7, movingAverage20Slope: 0.3, movingAverage60Slope: 0.2, rsi14: 54, macdLine: 0.22, macdSignal: 0.25, macdHistogram: -0.03, atr14: 0.75, atrPercent: 3.1, distanceToResistance1: 2.8, distanceToSupport1: 4.4, industryStrength: 0.52, industryBreadth: 0.5, industryReturn20d: 3.4, industryReturn60d: 6.8, industryTrendStrength: 0.55, scoreReason: ['量能一般'] },
       expert: { bullishCount: 20, bearishCount: 18, neutralCount: 12, consensus: 0.53, score: 60, highlights: ['专家分歧较大'], risks: ['技术分一般'] },
       marketState: {
         asOfDate: '2026-04-02', trend: 'range_bound', volatility: 'normal_volatility', liquidity: 'normal_liquidity', sentiment: 'neutral', style: 'balanced', csi500Return20d: 1.2, annualizedVolatility20d: 18, averageTurnover20d: 120000000000, risingRatio: 0.52,
       },
       thresholds: { minCompositeScore: 76, minExpertConsensus: 0.63, minTechnicalScore: 70, minQuantScore: 65 },
-      technical: { total: 67, absolute: 66, relative: 68, sector: 65, notes: ['技术分刚及格'] },
-      quant: { total: 63, momentum: 62, volumeBreakout: 61, volatility: 64, liquidity: 66, value: 60, notes: ['量化分略低'] },
+      technical: { total: 67, trend: 66, momentumConfirmation: 68, structure: 65, participation: 67, risk: 69, absolute: 66, relative: 68, sector: 65, notes: ['技术分刚及格'] },
+      quant: { total: 63, mediumTermMomentum: 62, crossSectionalStrength: 61, liquidityQuality: 66, stability: 64, meanReversion: 63, momentum: 62, volumeBreakout: 61, volatility: 64, liquidity: 66, value: 60, notes: ['量化分略低'] },
       compositeScore: 68,
+      scoreBonus: 0,
       finalScore: 68,
       action: 'watch',
       suggestedPosition: 0,
@@ -184,6 +208,21 @@ const baseOverview: StockAnalysisOverview = {
     { group: 'claude', predictionCount: 118, winRate: 0.62, averageConfidence: 0.71, calibration: 0.85, weight: 1.2, isSimulated: true },
     { group: 'qwen', predictionCount: 42, winRate: 0.38, averageConfidence: 0.73, calibration: 0.75, weight: 1.0, isSimulated: true },
   ],
+  recentReviews: [],
+  riskEvents: [],
+  riskLimits: {
+    maxDailyLossPercent: 3,
+    maxWeeklyLossPercent: 8,
+    maxMonthlyLossPercent: 12,
+    maxDrawdownPercent: 15,
+  },
+  positionEvaluations: [],
+  swapSuggestions: [],
+  notifications: [],
+  marketLevelRisk: null,
+  learnedWeights: null,
+  expertPerformance: null,
+  thresholdHistory: [],
   performanceDashboard: {
     convictionPassRate: 0.15,
     watchAccuracy: 0.8,
@@ -214,6 +253,28 @@ const baseOverview: StockAnalysisOverview = {
     quoteCacheAt: '2026-04-02T08:00:00.000Z',
     indexHistoryCacheAt: '2026-04-02T08:00:00.000Z',
     isUsingFallback: false,
+    riskControl: {
+      paused: false,
+      pauseReason: null,
+      pausedAt: null,
+      dailyLossPercent: 0,
+      weeklyLossPercent: 0,
+      monthlyLossPercent: 0,
+      maxDrawdownPercent: -3.2,
+      dailyLossBreached: false,
+      weeklyLossBreached: false,
+      monthlyLossBreached: false,
+      maxDrawdownBreached: false,
+      lastCheckedAt: '2026-04-02T08:00:00.000Z',
+    },
+    postMarketAt: null,
+    intradayMonitor: {
+      state: 'idle',
+      lastPollAt: null,
+      pollCount: 0,
+      activeAlertCount: 0,
+      startedAt: null,
+    },
   },
 }
 
@@ -281,6 +342,30 @@ test('buildBehaviorProfileSummary tracks execution and override ratios', () => {
   assert.equal(Math.round(profile2.overrideRate * 100), 33) // 1/3
 })
 
+test('buildBehaviorProfileSummary counts system auto decisions as execution and ignore', () => {
+  const overviewWithAutoDecisions = {
+    ...baseOverview,
+    topSignals: [
+      {
+        ...baseOverview.topSignals[0],
+        id: 'signal-auto-buy',
+        decisionSource: 'system_auto_buy' as const,
+      },
+      {
+        ...baseOverview.topSignals[1],
+        id: 'signal-auto-ignore',
+        decisionSource: 'system_auto_ignore' as const,
+      },
+    ],
+  }
+
+  const profile = buildBehaviorProfileSummary(overviewWithAutoDecisions)
+  assert.equal(Math.round(profile.executionRate * 100), 50)
+  assert.equal(Math.round(profile.ignoreRate * 100), 50)
+  assert.equal(Math.round(profile.rejectRate * 100), 0)
+  assert.equal(Math.round(profile.overrideRate * 100), 0)
+})
+
 test('buildConvictionStats exposes current threshold summary', () => {
   const stats = buildConvictionStats(baseOverview.topSignals, baseOverview.marketState)
   assert.equal(stats.buyCount, 1)
@@ -306,7 +391,9 @@ test('buildDailyAdviceSummary includes proactive sell signals from positionEvalu
       currentTechnicalScore: 35,
       currentQuantScore: 30,
       currentCompositeScore: 35,
+      currentFinalScore: 35,
       buyCompositeScore: 75,
+      buyFinalScore: 75,
       scoreDelta: -40,
       expertConsensus: 0.35,
       technicalBreakdown: true,
@@ -360,7 +447,9 @@ test('buildDailyAdviceSummary avoids duplicate sells for same code in reactive a
       currentTechnicalScore: 35,
       currentQuantScore: 30,
       currentCompositeScore: 35,
+      currentFinalScore: 35,
       buyCompositeScore: 75,
+      buyFinalScore: 75,
       scoreDelta: -40,
       expertConsensus: 0.35,
       technicalBreakdown: true,

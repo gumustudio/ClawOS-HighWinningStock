@@ -69,7 +69,9 @@ export interface FrontendLogEntry {
 
 let logsDir = ''
 const LOG_RETENTION_DAYS = 30
+const LOG_TOTAL_SIZE_LIMIT_BYTES = 128 * 1024 * 1024
 const MODULE_TAG = 'SALogger'
+let lastCleanupStartedAt = 0
 
 // ==================== 工具函数 ====================
 
@@ -83,6 +85,17 @@ function nowIso(): string {
 
 function formatLine(level: SALogLevel, module: string, message: string): string {
   return `[${nowIso()}] [${module}] [${level.toUpperCase()}] ${message}\n`
+}
+
+function triggerCleanupIfNeeded(): void {
+  const now = Date.now()
+  if (!logsDir || now - lastCleanupStartedAt < 60 * 60 * 1000) {
+    return
+  }
+  lastCleanupStartedAt = now
+  cleanupOldLogs().catch((err) => {
+    logger.warn(`后台日志清理失败: ${(err as Error).message}`, { module: MODULE_TAG })
+  })
 }
 
 /** 安全追加写入，失败仅记录到 Winston 不抛异常 */
@@ -143,23 +156,30 @@ export async function initSALogger(stockAnalysisDir: string): Promise<void> {
  */
 function writeBusinessLog(level: SALogLevel, module: string, message: string, data?: Record<string, unknown>): void {
   if (!logsDir) {
-    // 未初始化，仅输出 Winston
-    logToWinston(level, module, message, data)
+    // 未初始化时，仅镜像 error/warn 到 Winston，避免业务日志双写到 backend-out.log
+    mirrorToWinston(level, module, message, data)
     return
   }
 
   const date = shanghaiDate()
-  const line = formatLine(level, module, message)
+  const line = data
+    ? formatLine(level, module, `${message} | ${JSON.stringify(data)}`)
+    : formatLine(level, module, message)
 
-  // 同步写入 Winston
-  logToWinston(level, module, message, data)
+  triggerCleanupIfNeeded()
 
   // 异步写入本地文件（不阻塞调用方）
   safeAppend(businessLogPath(date), line)
+
+  // 仅将 warn/error 镜像到 Winston，避免同一条业务日志再写 backend-out.log
+  mirrorToWinston(level, module, message, data)
 }
 
-function logToWinston(level: SALogLevel, module: string, message: string, data?: Record<string, unknown>): void {
-  const winstonLevel = level === 'warn' ? 'warn' : level
+function mirrorToWinston(level: SALogLevel, module: string, message: string, data?: Record<string, unknown>): void {
+  if (level !== 'warn' && level !== 'error') {
+    return
+  }
+  const winstonLevel = level
   const payload = data ? `${message} | ${JSON.stringify(data)}` : message
   logger.log(winstonLevel, payload, { module })
 }
@@ -199,6 +219,7 @@ export const saLog = {
     if (!logsDir) return
     const date = shanghaiDate()
     const line = JSON.stringify(entry) + '\n'
+    triggerCleanupIfNeeded()
     await safeAppend(llmCallLogPath(date), line)
   },
 
@@ -211,6 +232,7 @@ export const saLog = {
     const lines = entries.map((e) =>
       `[${e.timestamp}] [${e.component}] [${e.level.toUpperCase()}] ${e.message}${e.data ? ' | ' + JSON.stringify(e.data) : ''}\n`
     ).join('')
+    triggerCleanupIfNeeded()
     await safeAppend(frontendLogPath(date), lines)
   },
 }
@@ -235,17 +257,55 @@ async function cleanupOldLogs(): Promise<void> {
 
   const datePattern = /(\d{4}-\d{2}-\d{2})/
   let cleaned = 0
+  const retainedFiles: Array<{ filePath: string; name: string; size: number; mtimeMs: number }> = []
 
   for (const entry of entries) {
-    const match = entry.match(datePattern)
-    if (!match) continue
+    const filePath = path.join(logsDir, entry)
+    let stat
+    try {
+      stat = await fs.stat(filePath)
+    } catch {
+      continue
+    }
+    if (!stat.isFile()) {
+      continue
+    }
 
-    const fileDate = new Date(match[1])
-    if (isNaN(fileDate.getTime())) continue
-
-    if (fileDate < cutoff) {
+    if (entry === 'stock-analysis-debug.log') {
       try {
-        await fs.unlink(path.join(logsDir, entry))
+        await fs.unlink(filePath)
+        cleaned++
+      } catch {
+        // 忽略单文件删除失败
+      }
+      continue
+    }
+
+    const match = entry.match(datePattern)
+    const fileDate = match ? new Date(match[1]) : new Date(stat.mtimeMs)
+    if (!isNaN(fileDate.getTime()) && fileDate < cutoff) {
+      try {
+        await fs.unlink(filePath)
+        cleaned++
+      } catch {
+        // 忽略单文件删除失败
+      }
+      continue
+    }
+
+    retainedFiles.push({ filePath, name: entry, size: stat.size, mtimeMs: stat.mtimeMs })
+  }
+
+  let totalSize = retainedFiles.reduce((sum, file) => sum + file.size, 0)
+  if (totalSize > LOG_TOTAL_SIZE_LIMIT_BYTES) {
+    const byOldestFirst = [...retainedFiles].sort((left, right) => left.mtimeMs - right.mtimeMs)
+    for (const file of byOldestFirst) {
+      if (totalSize <= LOG_TOTAL_SIZE_LIMIT_BYTES) {
+        break
+      }
+      try {
+        await fs.unlink(file.filePath)
+        totalSize -= file.size
         cleaned++
       } catch {
         // 忽略单文件删除失败
@@ -254,8 +314,21 @@ async function cleanupOldLogs(): Promise<void> {
   }
 
   if (cleaned > 0) {
-    logger.info(`清理了 ${cleaned} 个过期日志文件（>${LOG_RETENTION_DAYS}天）`, { module: MODULE_TAG })
+    logger.info(
+      `清理了 ${cleaned} 个日志文件（保留 ${LOG_RETENTION_DAYS} 天，总量上限 ${Math.round(LOG_TOTAL_SIZE_LIMIT_BYTES / 1024 / 1024)}MB）`,
+      { module: MODULE_TAG },
+    )
   }
+}
+
+export const _testing = {
+  cleanupOldLogs,
+  triggerCleanupIfNeeded,
+  businessLogPath,
+  llmCallLogPath,
+  frontendLogPath,
+  LOG_RETENTION_DAYS,
+  LOG_TOTAL_SIZE_LIMIT_BYTES,
 }
 
 // ==================== 旧 API 兼容 ====================

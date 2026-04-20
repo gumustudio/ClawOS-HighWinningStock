@@ -287,9 +287,15 @@ export function buildWeeklyDashboardSummary(overview: StockAnalysisOverview, con
 
 export function buildBehaviorProfileSummary(overview: StockAnalysisOverview): BehaviorProfileSummary {
   const totalSignals = overview.topSignals.length
-  const executionCount = overview.topSignals.filter((signal) => signal.decisionSource === 'user_confirmed').length
+  // v1.35.0 [A9-P0-1] executionCount 包含 user_confirmed + system_auto_buy（自动买入本质也是执行决策）
+  const executionCount = overview.topSignals.filter((signal) =>
+    signal.decisionSource === 'user_confirmed' || signal.decisionSource === 'system_auto_buy'
+  ).length
   const rejectCount = overview.topSignals.filter((signal) => signal.decisionSource === 'user_rejected').length
-  const ignoreCount = overview.topSignals.filter((signal) => signal.decisionSource === 'user_ignored').length
+  // ignoreCount 包含 user_ignored + system_auto_ignore（自动忽略）
+  const ignoreCount = overview.topSignals.filter((signal) =>
+    signal.decisionSource === 'user_ignored' || signal.decisionSource === 'system_auto_ignore'
+  ).length
   const overrideCount = overview.topSignals.filter((signal) => signal.decisionSource === 'user_override').length
   const watchRate = safeDivide(overview.stats.watchSignals, overview.stats.candidatePoolSize)
   const disciplineScore = Math.round(

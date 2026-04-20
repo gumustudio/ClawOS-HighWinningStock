@@ -32,6 +32,7 @@ export const logger = winston.createLogger({
     }),
     new winston.transports.File({
       filename: path.join(logDir, 'backend-out.log'),
+      level: 'warn',
       maxsize: 50 * 1024 * 1024,
       maxFiles: 5,
     }),

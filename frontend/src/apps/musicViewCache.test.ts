@@ -35,6 +35,13 @@ function createSnapshot(): Omit<MusicViewCacheSnapshot, 'updatedAt'> {
       [makeSearchViewKey('周杰伦')]: [{ id: '2', title: '晴天', artist: '周杰伦', album: '叶惠美', duration: '04:29' }],
       [makeSearchViewKey('林俊杰')]: [{ id: '3', title: '曹操', artist: '林俊杰', album: '曹操', duration: '04:12' }],
     },
+    viewUpdatedAt: {
+      [makePlaylistViewKey('playlist-1')]: 1,
+      [makeSearchViewKey('周杰伦')]: 1,
+      [makeSearchViewKey('林俊杰')]: 1,
+    },
+    recentSearches: ['周杰伦', '林俊杰'],
+    recentViewKeys: [makePlaylistViewKey('playlist-1'), makeSearchViewKey('周杰伦')],
     playlists: [{ id: 'playlist-1', name: '我喜欢的音乐', creator: { userId: 1 } }],
     userInfo: { userId: 1, nickname: 'Chris', avatarUrl: 'avatar.png' },
   }

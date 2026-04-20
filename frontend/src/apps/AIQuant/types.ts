@@ -9,6 +9,17 @@ export type PositionAction = 'hold' | 'reduce' | 'take_profit' | 'stop_loss' | '
 export type StockAnalysisRunState = 'idle' | 'running' | 'success' | 'failed'
 export type StockAnalysisDataState = 'empty' | 'ready' | 'stale'
 
+// v1.35.0 [A9-P0-1] 与后端 DecisionSource 完全对齐（7 个值）
+// 防止 runAutoDecisions 写入 'system_auto_buy' / 'system_auto_ignore' 时前端统计器漏计。
+export type DecisionSource =
+  | 'system'
+  | 'user_confirmed'
+  | 'user_rejected'
+  | 'user_ignored'
+  | 'user_override'
+  | 'system_auto_buy'
+  | 'system_auto_ignore'
+
 export interface StockAnalysisMarketState {
   asOfDate: string
   trend: MarketTrend
@@ -166,7 +177,8 @@ export interface StockAnalysisSignal {
   reasoning: string[]
   confidence: number
   createdAt: string
-  decisionSource: 'system' | 'user_confirmed' | 'user_rejected' | 'user_ignored' | 'user_override'
+  // v1.35.0 [A9-P0-1] 与后端 types.ts DecisionSource 对齐（7 个值，补齐 system_auto_buy / system_auto_ignore）
+  decisionSource: DecisionSource
   userDecisionNote: string | null
   /**
    * v1.30.2: 盘中实时行情（与 snapshot 分离，snapshot 保持为信号生成时刻的历史基准）
@@ -1073,7 +1085,7 @@ export interface ExpertAnalysisResponse {
       isSimulated?: boolean
     }
     confidence: number
-    decisionSource: string
+    decisionSource: DecisionSource
     vetoReasons: string[]
     watchReasons: string[]
   }>

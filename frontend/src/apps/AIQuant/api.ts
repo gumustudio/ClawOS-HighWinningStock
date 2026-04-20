@@ -155,11 +155,21 @@ export function autoExecuteDailyStrategy(tradeDate?: string) {
   })
 }
 
+// v1.35.0 [A4-P0-2] 前端生成 clientNonce（uuid-like），防止网络重试 / 双击造成重复扣减
+function generateClientNonce(): string {
+  // 优先用 crypto.randomUUID，退回到时间戳+随机
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID()
+  }
+  return `${Date.now()}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`
+}
+
 export function closeStockAnalysisPosition(positionId: string, payload: { price?: number; note?: string } = {}) {
   return requestJson<StockAnalysisTradeRecord>(`/api/system/stock-analysis/positions/${positionId}/close`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
+    // v1.35.0 [A4-P0-2] 自动附带 clientNonce
+    body: JSON.stringify({ ...payload, clientNonce: generateClientNonce() }),
   })
 }
 
@@ -167,7 +177,8 @@ export function reduceStockAnalysisPosition(positionId: string, payload: { weigh
   return requestJson<StockAnalysisTradeRecord>(`/api/system/stock-analysis/positions/${positionId}/reduce`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
+    // v1.35.0 [A4-P0-2] 自动附带 clientNonce
+    body: JSON.stringify({ ...payload, clientNonce: generateClientNonce() }),
   })
 }
 
