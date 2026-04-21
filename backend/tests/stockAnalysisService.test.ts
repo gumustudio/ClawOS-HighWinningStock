@@ -6,6 +6,8 @@ import path from 'node:path'
 import childProcess from 'node:child_process'
 import { promisify } from 'node:util'
 
+import type { StockAnalysisAIConfig } from '../src/services/stock-analysis/types'
+
 async function createTempStockAnalysisDir() {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'clawos-stock-analysis-service-'))
   return {
@@ -49,6 +51,36 @@ function createExecFileMock(handlers: (script: string) => { stdout: string; stde
   }
 
   return mockedExecFile
+}
+
+const TEST_AI_CONFIG: StockAnalysisAIConfig = {
+  providers: [
+    {
+      id: 'provider-1',
+      name: 'Mock Provider',
+      provider: 'dashscope',
+      apiKey: 'mock-key',
+      endpoint: null,
+      model: 'qwen3.6-plus',
+      maxTokens: 4096,
+      temperature: 0.2,
+      timeoutMs: 30_000,
+      enabled: true,
+    },
+  ],
+  experts: [
+    {
+      id: 'macro_llm_1',
+      name: '宏观专家',
+      layer: 'macro',
+      stance: 'balanced',
+      temperature: 0.2,
+      enabled: true,
+      assignedModel: 'qwen3.6-plus',
+      providerId: 'provider-1',
+      providerModelId: null,
+    },
+  ],
 }
 
 test('stock analysis daily run uses direct Eastmoney index history before AKShare fallback', async () => {
@@ -308,6 +340,130 @@ test('stock analysis daily run succeeds with Tencent as primary source even when
     assert.equal(result.usedFallbackData, false)
     assert.equal(result.staleReasons.length, 0)
   } finally {
+    global.fetch = originalFetch
+    childProcess.execFile = originalExecFile
+    await fs.rm(tempRoot, { recursive: true, force: true })
+  }
+})
+
+test('stock analysis daily run still executes LLM voting when positions are full', async () => {
+  const originalFetch = global.fetch
+  const originalExecFile = childProcess.execFile
+  const originalDateNow = Date.now
+  const { tempRoot, stockAnalysisDir } = await createTempStockAnalysisDir()
+
+  global.fetch = (async (input: RequestInfo | URL) => {
+    const url = String(input)
+
+    if (url.includes('/api/qt/ulist.np/get')) {
+      return {
+        ok: true,
+        json: async () => ({
+          data: {
+            diff: [
+              { f12: '600519', f14: '贵州茅台', f2: 1459.44, f3: 0.65, f8: 0.23, f15: 1465, f16: 1440, f17: 1450, f18: 1450, f20: 1830000000000, f21: 1830000000000 },
+            ],
+          },
+        }),
+      } as Response
+    }
+
+    if (url.includes('secid=1.000905')) {
+      return {
+        ok: true,
+        json: async () => ({
+          data: {
+            klines: [
+              '2026-03-26,1000,1000,1001,999,100000,100000000000,1,0,0,0',
+              '2026-03-27,1000,1006,1008,998,110000,120000000000,1,0.6,6,0',
+              '2026-03-30,1006,1010,1015,1005,120000,125000000000,1,0.4,4,0',
+              '2026-03-31,1010,1014,1018,1008,130000,130000000000,1,0.4,4,0',
+              '2026-04-01,1014,1018,1020,1012,140000,135000000000,1,0.39,4,0',
+            ],
+          },
+        }),
+      } as Response
+    }
+
+    if (url.includes('/api/qt/stock/kline/get?secid=1.600519')) {
+      return {
+        ok: true,
+        json: async () => ({
+          data: {
+            klines: Array.from({ length: 40 }, (_, index) => {
+              const day = String(index + 1).padStart(2, '0')
+              const close = 1400 + index * 2
+              return `2026-03-${day},${close - 1},${close},${close + 2},${close - 3},100000,500000000,5,1,2,3.2`
+            }),
+          },
+        }),
+      } as Response
+    }
+
+    throw new Error(`unexpected fetch: ${url}`)
+  }) as typeof fetch
+
+  childProcess.execFile = createExecFileMock((script) => {
+    if (script.includes("index_stock_cons_csindex(symbol='000905')")) {
+      return {
+        stdout: JSON.stringify({
+          success: true,
+          data: [{ 成分券代码: '600519', 成分券名称: '贵州茅台', 交易所: '上海证券交易所' }],
+        }),
+      }
+    }
+    throw new Error(`unexpected python script: ${script.slice(0, 80)}`)
+  })
+
+  Date.now = () => 1_760_000_000_000
+
+  try {
+    const service = await import(`../src/services/stock-analysis/service?ts=${Date.now()}-force-full-analysis`)
+    const store = await import(`../src/services/stock-analysis/store?ts=${Date.now()}-force-full-analysis`)
+    const llmInference = await import(`../src/services/stock-analysis/llm-inference?ts=${Date.now()}-force-full-analysis`)
+
+    let runExpertVotingCalls = 0
+    const originalRunExpertVoting = llmInference.runExpertVoting
+    llmInference.runExpertVoting = (async () => {
+      runExpertVotingCalls += 1
+      return {
+        bullishCount: 1,
+        bearishCount: 0,
+        neutralCount: 0,
+        consensus: 1,
+        score: 82,
+        highlights: ['LLM 投票成功'],
+        risks: [],
+        votes: [],
+        llmSuccessCount: 1,
+        llmFallbackCount: 0,
+        ruleFallbackCount: 0,
+        fallbackCount: 0,
+        isSimulated: false,
+        degradeRatio: 0,
+      }
+    }) as typeof llmInference.runExpertVoting
+
+    await store.ensureStockAnalysisStructure(stockAnalysisDir)
+    await store.saveStockAnalysisAIConfig(stockAnalysisDir, TEST_AI_CONFIG)
+    await store.saveStockAnalysisPositions(stockAnalysisDir, [
+      {
+        id: 'pos-1', code: '000001', name: '仓位1', weight: 0.33, costPrice: 10, latestPrice: 10, stopLossPrice: 9.7, takeProfitPrice1: 10.3, takeProfitPrice2: 10.6, highestPriceSinceOpen: 10, openedAt: '2026-04-01T09:35:00.000Z', sourceSignalId: null, action: 'hold', actionReason: 'test', reviewNote: null,
+      },
+      {
+        id: 'pos-2', code: '000002', name: '仓位2', weight: 0.33, costPrice: 10, latestPrice: 10, stopLossPrice: 9.7, takeProfitPrice1: 10.3, takeProfitPrice2: 10.6, highestPriceSinceOpen: 10, openedAt: '2026-04-01T09:35:00.000Z', sourceSignalId: null, action: 'hold', actionReason: 'test', reviewNote: null,
+      },
+      {
+        id: 'pos-3', code: '000003', name: '仓位3', weight: 0.34, costPrice: 10, latestPrice: 10, stopLossPrice: 9.7, takeProfitPrice1: 10.3, takeProfitPrice2: 10.6, highestPriceSinceOpen: 10, openedAt: '2026-04-01T09:35:00.000Z', sourceSignalId: null, action: 'hold', actionReason: 'test', reviewNote: null,
+      },
+    ])
+
+    await service.runStockAnalysisDaily(stockAnalysisDir)
+    assert.equal(runExpertVotingCalls, 1, 'daily run 在满仓时也应继续执行 LLM')
+
+    llmInference.runExpertVoting = originalRunExpertVoting
+  } finally {
+    Date.now = originalDateNow
     global.fetch = originalFetch
     childProcess.execFile = originalExecFile
     await fs.rm(tempRoot, { recursive: true, force: true })

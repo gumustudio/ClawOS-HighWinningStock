@@ -366,14 +366,24 @@ const CORS_ORIGIN_WHITELIST = [
   'http://127.0.0.1:5173',
   'http://127.0.0.1:3001',
 ];
+
+function isAllowedCorsOrigin(origin: string): boolean {
+  if (CORS_ORIGIN_WHITELIST.includes(origin) || origin.startsWith('http://localhost')) {
+    return true;
+  }
+
+  try {
+    const parsedOrigin = new URL(origin);
+    return parsedOrigin.hostname === 'ts.net' || parsedOrigin.hostname.endsWith('.ts.net');
+  } catch {
+    return false;
+  }
+}
+
 app.use(cors({
   origin: (origin, callback) => {
     // 允许无 origin 请求（同源 / curl / 代理内部调用）
-    if (!origin || CORS_ORIGIN_WHITELIST.includes(origin)) {
-      return callback(null, true);
-    }
-    // Tailscale Funnel / ClawOS 内网域名 — 允许 *.ts.net 和 http://localhost
-    if (/^https?:\/\/[\w-]+\.ts\.net$/.test(origin) || origin.startsWith('http://localhost')) {
+    if (!origin || isAllowedCorsOrigin(origin)) {
       return callback(null, true);
     }
     logger.warn(`CORS 拒绝：非白名单 origin=${origin}`, { module: 'Server' });

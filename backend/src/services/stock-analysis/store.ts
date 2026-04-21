@@ -81,6 +81,7 @@ export const DEFAULT_STOCK_ANALYSIS_CONFIG: StockAnalysisStrategyConfig = {
   maxSinglePosition: 1.0,
   maxTotalPosition: 1.0,
   stopLossPercent: 3,
+  intradayAutoCloseLossPercent: 5,
   takeProfitPercent1: 3,
   takeProfitPercent2: 6,
   maxHoldDays: 20,

@@ -65,7 +65,6 @@ import {
   saveStockAnalysisConfig,
   atomicUpdateRuntimeStatus,
   readStockAnalysisExpertPerformance,
-  saveStockAnalysisExpertPerformance,
   readAutoReportNotifications,
   saveAutoReportNotifications,
   readMonthlyReports,
@@ -145,7 +144,6 @@ import type {
   StockAnalysisAIProvider,
   StockAnalysisExpertDefinition,
   StockAnalysisExpertLayer,
-  StockAnalysisExpertOutcome,
   StockAnalysisExpertPerformanceData,
   StockAnalysisExpertPerformanceEntry,
   StockAnalysisExpertScore,
@@ -2752,183 +2750,11 @@ async function buildReviewRecord(
   }
 }
 
-/** Phase 6: 平仓后回溯各专家预测结果，更新个体表现追踪 */
-const MAX_EXPERT_OUTCOMES = 50
+/** Phase 6: 专家动态权重计算常量 */
 const MIN_PREDICTIONS_FOR_WEIGHT = 5
 const EXPERT_WEIGHT_MIN = 0.1
 const EXPERT_WEIGHT_MAX = 2.0
 const EXPERT_WEIGHT_DECAY_HALF_LIFE_DAYS = 60
-
-async function updateExpertPerformance(
-  stockAnalysisDir: string,
-  position: StockAnalysisPosition,
-  pnlPercent: number,
-): Promise<void> {
-  if (!position.sourceSignalId) return
-
-  // 从 signal ID 提取 tradeDate：signal-{code}-{tradeDate}
-  const signalParts = position.sourceSignalId.split('-')
-  const signalTradeDate = signalParts.length >= 3 ? signalParts.slice(2).join('-') : null
-  if (!signalTradeDate) {
-    logger.debug(`[stock-analysis] updateExpertPerformance: 无法从 signalId=${position.sourceSignalId} 提取日期`, { module: 'StockAnalysis' })
-    return
-  }
-
-  let buySignalVotes: StockAnalysisExpertScore['votes'] = []
-  try {
-    const signals = await readStockAnalysisSignals(stockAnalysisDir, signalTradeDate)
-    const buySignal = signals.find((s) => s.id === position.sourceSignalId)
-    if (!buySignal || !buySignal.expert.votes || buySignal.expert.votes.length === 0) {
-      logger.debug(`[stock-analysis] updateExpertPerformance: 信号 ${position.sourceSignalId} 无投票数据`, { module: 'StockAnalysis' })
-      return
-    }
-    buySignalVotes = buySignal.expert.votes
-  } catch {
-    logger.debug(`[stock-analysis] updateExpertPerformance: 读取信号 ${signalTradeDate} 失败`, { module: 'StockAnalysis' })
-    return
-  }
-
-  const existing = await readStockAnalysisExpertPerformance(stockAnalysisDir)
-  const entryMap = new Map(existing.entries.map((e) => [e.expertId, e]))
-
-  for (const vote of buySignalVotes) {
-    // 判断预测是否正确：bullish+涨 或 bearish+跌 视为正确，neutral 不参与胜率计算
-    const isNeutral = vote.verdict === 'neutral'
-    const correct = isNeutral
-      ? Math.abs(pnlPercent) < 1 // neutral 预测 + 涨跌幅 <1% 视为正确
-      : (vote.verdict === 'bullish' && pnlPercent > 0) || (vote.verdict === 'bearish' && pnlPercent < 0)
-
-    const outcome: StockAnalysisExpertOutcome = {
-      tradeDate: signalTradeDate,
-      code: position.code,
-      verdict: vote.verdict,
-      confidence: vote.confidence,
-      actualReturnPercent: round(pnlPercent),
-      correct,
-      source: 'position',
-    }
-
-    const entry = entryMap.get(vote.expertId)
-    if (entry) {
-      entry.predictionCount += 1
-      if (correct) entry.correctCount += 1
-      entry.winRate = round(entry.correctCount / entry.predictionCount, 4)
-      entry.averageConfidence = round(
-        (entry.averageConfidence * (entry.predictionCount - 1) + vote.confidence) / entry.predictionCount,
-      )
-      entry.calibration = round(Math.abs(entry.averageConfidence / 100 - entry.winRate), 4)
-      entry.weight = computeExpertWeight(entry)
-      entry.lastPredictionDate = signalTradeDate
-      entry.recentOutcomes = [outcome, ...entry.recentOutcomes].slice(0, MAX_EXPERT_OUTCOMES)
-    } else {
-      const newEntry: StockAnalysisExpertPerformanceEntry = {
-        expertId: vote.expertId,
-        expertName: vote.expertName,
-        layer: vote.layer,
-        predictionCount: 1,
-        correctCount: correct ? 1 : 0,
-        winRate: correct ? 1 : 0,
-        averageConfidence: vote.confidence,
-        calibration: 0,
-        weight: 1,
-        lastPredictionDate: signalTradeDate,
-        recentOutcomes: [outcome],
-      }
-      entryMap.set(vote.expertId, newEntry)
-    }
-  }
-
-  const updatedData: StockAnalysisExpertPerformanceData = {
-    updatedAt: nowIso(),
-    entries: Array.from(entryMap.values()),
-  }
-
-  await saveStockAnalysisExpertPerformance(stockAnalysisDir, updatedData)
-  logger.debug(`[stock-analysis] updateExpertPerformance: 更新了 ${buySignalVotes.length} 个专家的表现记录 (pnl=${pnlPercent}%)`, { module: 'StockAnalysis' })
-}
-
-/**
- * [v1.33.0 阶段 D] 双轨胜率统计：扫描最近交易日的 daily-memories，
- * 累加每位专家未处理日期的 1d（actualReturnNextDay）和 5d（actualReturn5d）结果。
- * 使用 predictionStatsUpdatedAt 作为游标防止重复累加。
- */
-export async function updateExpertPredictionStats(
-  stockAnalysisDir: string,
-  tradeDate: string,
-): Promise<void> {
-  // 扫描最近 10 个交易日（覆盖 T-5 回填窗口 + 缓冲）
-  const recentDates = getRecentTradeDates(tradeDate, 10)
-  if (recentDates.length === 0) return
-
-  const existing = await readStockAnalysisExpertPerformance(stockAnalysisDir)
-  const entryMap = new Map(existing.entries.map((e) => [e.expertId, e]))
-
-  // 按专家分组：{ expertId → Array<{ date, entry }> }
-  // 为了保证顺序可预测，按日期升序处理
-  const sortedDates = [...recentDates].sort() // 升序：旧→新
-
-  let totalDelta1d = 0
-  let totalDelta5d = 0
-
-  for (const date of sortedDates) {
-    let dayEntries: ExpertDailyMemoryEntry[]
-    try {
-      dayEntries = await readExpertDailyMemories(stockAnalysisDir, date)
-    } catch {
-      continue
-    }
-    if (dayEntries.length === 0) continue
-
-    for (const mem of dayEntries) {
-      const entry = entryMap.get(mem.expertId)
-      if (!entry) continue // 专家必须已存在（由 updateExpertPerformance 创建），否则跳过
-
-      // 游标：只处理 predictionStatsUpdatedAt 之后的日期
-      const cursor = entry.predictionStatsUpdatedAt ?? ''
-      if (date <= cursor) continue
-
-      // 1d 累加（仅当已回填）
-      if (mem.actualReturnNextDay !== null && mem.actualReturnNextDay !== undefined
-          && mem.wasCorrect !== null && mem.wasCorrect !== undefined) {
-        entry.predictionCount1d = (entry.predictionCount1d ?? 0) + 1
-        if (mem.wasCorrect) entry.correctCount1d = (entry.correctCount1d ?? 0) + 1
-        else entry.correctCount1d = entry.correctCount1d ?? 0
-        entry.winRate1d = round(entry.correctCount1d / entry.predictionCount1d, 4)
-        totalDelta1d++
-      }
-
-      // 5d 累加（仅当已回填）
-      if (mem.actualReturn5d !== null && mem.actualReturn5d !== undefined
-          && mem.wasCorrect5d !== null && mem.wasCorrect5d !== undefined) {
-        entry.predictionCount5d = (entry.predictionCount5d ?? 0) + 1
-        if (mem.wasCorrect5d) entry.correctCount5d = (entry.correctCount5d ?? 0) + 1
-        else entry.correctCount5d = entry.correctCount5d ?? 0
-        entry.winRate5d = round(entry.correctCount5d / entry.predictionCount5d, 4)
-        totalDelta5d++
-      }
-    }
-  }
-
-  // 推进所有专家的游标到 tradeDate（即使今日无增量也要推进，避免下次重扫）
-  // 但只对已有 1d 或 5d 样本的专家更新，避免污染未参与预测的专家
-  for (const entry of entryMap.values()) {
-    const has1d = (entry.predictionCount1d ?? 0) > 0
-    const has5d = (entry.predictionCount5d ?? 0) > 0
-    if (has1d || has5d) {
-      entry.predictionStatsUpdatedAt = tradeDate
-    }
-  }
-
-  const updatedData: StockAnalysisExpertPerformanceData = {
-    updatedAt: nowIso(),
-    entries: Array.from(entryMap.values()),
-  }
-  await saveStockAnalysisExpertPerformance(stockAnalysisDir, updatedData)
-  logger.info(
-    `[stock-analysis] updateExpertPredictionStats: 累加 ${totalDelta1d} 条 1d 结果 / ${totalDelta5d} 条 5d 结果 (tradeDate=${tradeDate})`,
-    { module: 'StockAnalysis' },
-  )
-}
 
 /** 计算单个专家的动态权重：基于胜率 + 时间衰减 */
 function computeExpertWeight(entry: StockAnalysisExpertPerformanceEntry): number {
@@ -3010,6 +2836,8 @@ const WEIGHT_DECAY_HALF_LIFE_DAYS = 30
 const MAX_WEIGHT_ADJUSTMENT = 0.2
 const MIN_REVIEWS_FOR_LEARNING = 5
 const MAX_WEIGHT_HISTORY = 50
+const MIN_EXPERT_FUSION_WEIGHT = 0.25
+const MAX_EXPERT_FUSION_WEIGHT = 0.45
 
 async function computeLearnedWeights(stockAnalysisDir: string): Promise<StockAnalysisLearnedWeights | null> {
   const reviews = await readStockAnalysisReviews(stockAnalysisDir)
@@ -3096,13 +2924,28 @@ function getAdjustedFusionWeights(
   const rawExpert = baseWeights.expert + adj.expert
   const rawTechnical = baseWeights.technical + adj.technical
   const rawQuant = baseWeights.quant + adj.quant
-  // 归一化确保总和为 1
   const total = rawExpert + rawTechnical + rawQuant
   if (total <= 0) return baseWeights
+
+  const normalizedExpert = rawExpert / total
+  const normalizedTechnical = rawTechnical / total
+  const normalizedQuant = rawQuant / total
+  const clampedExpert = Math.max(MIN_EXPERT_FUSION_WEIGHT, Math.min(MAX_EXPERT_FUSION_WEIGHT, normalizedExpert))
+  const remainingWeight = 1 - clampedExpert
+  const nonExpertTotal = normalizedTechnical + normalizedQuant
+
+  if (nonExpertTotal <= 0) {
+    return {
+      expert: round(clampedExpert, 4),
+      technical: round(remainingWeight * 0.5, 4),
+      quant: round(remainingWeight * 0.5, 4),
+    }
+  }
+
   return {
-    expert: round(rawExpert / total, 4),
-    technical: round(rawTechnical / total, 4),
-    quant: round(rawQuant / total, 4),
+    expert: round(clampedExpert, 4),
+    technical: round((normalizedTechnical / nonExpertTotal) * remainingWeight, 4),
+    quant: round((normalizedQuant / nonExpertTotal) * remainingWeight, 4),
   }
 }
 
@@ -3589,6 +3432,22 @@ function buildPerformanceDashboard(signals: StockAnalysisSignal[], watchLogs: St
   }
 }
 
+function hasModelGroupPerformanceSamples(expertPerformance?: StockAnalysisExpertPerformanceData | null) {
+  return Boolean(expertPerformance && expertPerformance.entries.length > 0)
+}
+
+async function resolveModelGroupPerformance(
+  stockAnalysisDir: string,
+  storedModelGroups: StockAnalysisModelGroupPerformance[],
+  expertPerformance?: StockAnalysisExpertPerformanceData | null,
+): Promise<StockAnalysisModelGroupPerformance[]> {
+  // expert-performance 被重置后，旧 model-groups 缓存不再可信，必须等待新样本重新生成。
+  if (!hasModelGroupPerformanceSamples(expertPerformance)) {
+    return []
+  }
+  return storedModelGroups.length > 0 ? storedModelGroups : buildModelGroupPerformance(stockAnalysisDir, expertPerformance)
+}
+
 // ==================== S2+S3: 自动周报/月报生成 ====================
 
 /**
@@ -3611,9 +3470,7 @@ export async function generateWeeklyReport(stockAnalysisDir: string): Promise<Au
   const weeklySummary = buildWeeklySummary(trades, watchLogs)
   await saveStockAnalysisWeeklySummary(stockAnalysisDir, weeklySummary)
 
-  const modelGroupPerformance = modelGroups.length > 0
-    ? modelGroups
-    : await buildModelGroupPerformance(stockAnalysisDir, expertPerformance)
+  const modelGroupPerformance = await resolveModelGroupPerformance(stockAnalysisDir, modelGroups, expertPerformance)
   const fallbackDate = todayDate()
   const marketState = (await readStockAnalysisMarketState(stockAnalysisDir, fallbackDate)) ?? buildFallbackMarketState(fallbackDate)
   const dashboard = buildPerformanceDashboard(signals, watchLogs, trades, modelGroupPerformance, marketState)
@@ -3777,9 +3634,7 @@ export async function generateMonthlyReport(stockAnalysisDir: string): Promise<A
   const monthlySummary = buildMonthlySummary(trades, watchLogs)
   await saveStockAnalysisMonthlySummary(stockAnalysisDir, monthlySummary)
 
-  const modelGroupPerformance = modelGroups.length > 0
-    ? modelGroups
-    : await buildModelGroupPerformance(stockAnalysisDir, expertPerformance)
+  const modelGroupPerformance = await resolveModelGroupPerformance(stockAnalysisDir, modelGroups, expertPerformance)
   const fallbackDate = todayDate()
   const marketState = (await readStockAnalysisMarketState(stockAnalysisDir, fallbackDate)) ?? buildFallbackMarketState(fallbackDate)
   const dashboard = buildPerformanceDashboard(signals, watchLogs, trades, modelGroupPerformance, marketState)
@@ -4458,10 +4313,10 @@ export async function runStockAnalysisDaily(stockAnalysisDir: string): Promise<S
       // Phase 6: 逐只股票生成信号（含 LLM 专家投票）
       // P2-A2: 提前加载交易记录，用于 Kelly 公式的实际盈亏比计算
       const tradesForKelly = await readStockAnalysisTrades(stockAnalysisDir)
-      // S5: 持仓满时跳过昂贵的 LLM 调用，使用公式评分（仅用于换仓比较）
+      // daily run 始终执行真实 LLM 分析；持仓是否已满只影响后续交易决策，不影响分析生成
       const positionsFull = currentPositions.length >= config.maxPositions
       if (positionsFull) {
-        logger.info(`[stock-analysis] 持仓已满 (${currentPositions.length}/${config.maxPositions})，新信号使用公式评分（仅用于换仓比较）`, { module: 'StockAnalysis' })
+        logger.info(`[stock-analysis] 持仓已满 (${currentPositions.length}/${config.maxPositions})，但 daily run 仍继续执行 LLM 分析，仅由仓位约束限制后续交易动作`, { module: 'StockAnalysis' })
       }
       // [v1.33.0 阶段 E] 预取候选池 + 持仓股的基本面（PE/PB/ROE/总市值），带当日缓存
       const fundamentalsTargetCodes = Array.from(new Set([
@@ -4472,7 +4327,7 @@ export async function runStockAnalysisDaily(stockAnalysisDir: string): Promise<S
       logger.info(`[stock-analysis] 基本面数据就绪：目标 ${fundamentalsTargetCodes.length} 只，命中 ${fundamentalsMap.size} 只`, { module: 'StockAnalysis' })
       const signalResults = await runLimitedConcurrency(candidatePool, 3, async (snapshot, index) => {
         await markRunState(stockAnalysisDir, 'running', { startedAt: nowIso(), phase: 'signals', processedCount: index, totalCount: candidatePool.length })
-        return buildSignal(snapshot, marketState, config, learnedWeights, positionsFull ? null : aiConfig, expertWeightsMap, historyMap.get(snapshot.code), profileMap, factPoolSummary, memoryStore, eventVetoCodes, tradesForKelly, factPoolForExperts, fundamentalsMap.get(snapshot.code) ?? null)
+        return buildSignal(snapshot, marketState, config, learnedWeights, aiConfig, expertWeightsMap, historyMap.get(snapshot.code), profileMap, factPoolSummary, memoryStore, eventVetoCodes, tradesForKelly, factPoolForExperts, fundamentalsMap.get(snapshot.code) ?? null)
       })
       const signals = signalResults.sort((left, right) => right.finalScore - left.finalScore)
 
@@ -4533,7 +4388,9 @@ export async function runStockAnalysisDaily(stockAnalysisDir: string): Promise<S
       const evaluatedWatchLogs = await evaluateWatchLogOutcomes(stockAnalysisDir, nextWatchLogs)
       const weeklySummary = buildWeeklySummary(trades, evaluatedWatchLogs)
       const monthlySummary = buildMonthlySummary(trades, evaluatedWatchLogs)
-      const modelGroups = await buildModelGroupPerformance(stockAnalysisDir, expertPerformanceData)
+      const modelGroups = hasModelGroupPerformanceSamples(expertPerformanceData)
+        ? await buildModelGroupPerformance(stockAnalysisDir, expertPerformanceData)
+        : []
       const performanceDashboard = buildPerformanceDashboard(signals, evaluatedWatchLogs, trades, modelGroups, marketState)
       const staleReasons = mergeStaleReasons(
         stockPoolEnvelope.staleReasons,
@@ -4747,17 +4604,8 @@ export async function runStockAnalysisPostMarket(
       assertWithinPostMarketWindow(postMarketStart, maxDurationMs, 'Phase 7 之前')
       try {
         const memoryAiConfig = await readStockAnalysisAIConfig(stockAnalysisDir)
-        // P1-1: 使用交易日历获取前一个交易日（而非自然日 -1，避免跨周末/节假日丢失回填）
-        const recentDatesForMem = getRecentTradeDates(tradeDate, 3)
-        const previousTradeDate = recentDatesForMem.length >= 2 ? recentDatesForMem[1] : tradeDate
-        await runDailyMemoryUpdate(stockAnalysisDir, tradeDate, previousTradeDate, memoryAiConfig)
+        await runDailyMemoryUpdate(stockAnalysisDir, tradeDate, memoryAiConfig)
         logger.info(`[stock-analysis] [盘后] 专家记忆更新完成: ${tradeDate}`, { module: 'StockAnalysis' })
-        // [v1.33.0 阶段 D] 双轨胜率统计：累加 daily-memories 中已回填的 1d/5d 结果
-        try {
-          await updateExpertPredictionStats(stockAnalysisDir, tradeDate)
-        } catch (error) {
-          logger.error(`[stock-analysis] [盘后] 双轨胜率统计失败（不影响盘后结果）: ${(error as Error).message}`)
-        }
       } catch (error) {
         logger.error(`[stock-analysis] [盘后] 专家记忆更新失败（不影响盘后结果）: ${(error as Error).message}`)
       }
@@ -4947,6 +4795,9 @@ function assertWithinPostMarketWindow(startedAt: number, maxDurationMs: number, 
  */
 export async function pollIntradayOnce(stockAnalysisDir: string): Promise<IntradayAlert[]> {
   const newAlerts: IntradayAlert[] = []
+  const autoClosedPositionIds = new Set<string>()
+  const tradingAvailability = checkTradingAvailability()
+  const canAutoCloseIntraday = tradingAvailability.canTrade
 
   try {
     const positions = await readStockAnalysisPositions(stockAnalysisDir)
@@ -4995,6 +4846,22 @@ export async function pollIntradayOnce(stockAnalysisDir: string): Promise<Intrad
       if (pnlPercent <= -config.stopLossPercent) {
         pushAlertIfNew('stop_loss', buyPrice * (1 - config.stopLossPercent / 100),
           `${position.name} 触发止损: 当前价 ${currentPrice}, 亏损 ${pnlPercent.toFixed(1)}% 超过止损线 ${config.stopLossPercent}%`)
+      }
+
+      if (canAutoCloseIntraday && pnlPercent <= -config.intradayAutoCloseLossPercent) {
+        try {
+          await closeStockAnalysisPosition(stockAnalysisDir, position.id, {
+            closeAll: true,
+            price: currentPrice,
+            note: `系统盘中自动止损平仓：${position.name}(${position.code}) 亏损 ${pnlPercent.toFixed(2)}% 超过 ${config.intradayAutoCloseLossPercent}% 阈值`,
+            clientNonce: `intraday-auto-close-${position.id}-${monitorStatus.pollCount + 1}`,
+          })
+          autoClosedPositionIds.add(position.id)
+          saLog.warn('Service', `[盘中] 自动平仓触发: ${position.code} current=${currentPrice} pnl=${pnlPercent.toFixed(2)}% threshold=-${config.intradayAutoCloseLossPercent}%`)
+        } catch (error) {
+          logger.error(`[stock-analysis] [盘中] 自动平仓失败 ${position.code}: ${(error as Error).message}`, { module: 'StockAnalysis' })
+          saLog.error('Service', `[盘中] 自动平仓失败 ${position.code}: ${(error as Error).message}`)
+        }
       }
 
       // 止盈 1 检查
@@ -5096,6 +4963,10 @@ export async function pollIntradayOnce(stockAnalysisDir: string): Promise<Intrad
       await saveIntradayAlerts(stockAnalysisDir, [...newAlerts, ...existingAlerts].slice(0, 500))
       logger.warn(`[stock-analysis] [盘中] 新增 ${newAlerts.length} 条告警`, { module: 'StockAnalysis' })
       saLog.info('Service', `[盘中] 新增告警 ${newAlerts.length} 条: ${newAlerts.map((a) => `${a.code}:${a.alertType}`).join(', ')}`)
+    }
+
+    if (autoClosedPositionIds.size > 0) {
+      saLog.audit('Service', `[盘中] 自动平仓完成 ${autoClosedPositionIds.size} 笔: ${positions.filter((position) => autoClosedPositionIds.has(position.id)).map((position) => position.code).join(', ')}`)
     }
 
     await saveIntradayMonitorStatus(stockAnalysisDir, {
@@ -5309,7 +5180,7 @@ export async function getStockAnalysisOverview(stockAnalysisDir: string): Promis
   const performance = calculatePerformance(trades)
   const weeklySummary = weeklySummaryStored.length > 0 ? weeklySummaryStored : buildWeeklySummary(trades, watchLogs)
   const monthlySummary = monthlySummaryStored.length > 0 ? monthlySummaryStored : buildMonthlySummary(trades, watchLogs)
-  const modelGroupPerformance = modelGroupsStored.length > 0 ? modelGroupsStored : await buildModelGroupPerformance(stockAnalysisDir, expertPerformance)
+  const modelGroupPerformance = await resolveModelGroupPerformance(stockAnalysisDir, modelGroupsStored, expertPerformance)
   const performanceDashboard = performanceDashboardStored ?? buildPerformanceDashboard(snapshot?.signals ?? [], watchLogs, trades, modelGroupPerformance, snapshot?.marketState ?? buildFallbackMarketState(tradeDate))
   const dataState = resolveDataState(runtimeStatus)
   const staleReasons = mergeStaleReasons(runtimeStatus.staleReasons, quoteEnvelope.staleReasons)
@@ -6042,11 +5913,6 @@ export async function closeStockAnalysisPosition(stockAnalysisDir: string, posit
       reduceIdempotencyCache.set(request.clientNonce, { ts: Date.now(), positionId })
     }
 
-    // Phase 6: 更新专家个体表现追踪（异步但不阻塞平仓结果）
-    updateExpertPerformance(stockAnalysisDir, position, pnlPercent).catch((error) => {
-      logger.error(`[stock-analysis] updateExpertPerformance 失败: ${error instanceof Error ? error.message : '未知错误'}`, { module: 'StockAnalysis' })
-    })
-
     saLog.audit('Service', `position closed: ${position.code} qty=${quantity} price=${price} pnl=${pnlPercent}% | review=${review.id}`)
     return trade
   })
@@ -6253,6 +6119,27 @@ export async function refreshStockAnalysisStockPool(stockAnalysisDir: string) {
 
 export async function getStockAnalysisConfig(stockAnalysisDir: string) {
   return readStockAnalysisConfig(stockAnalysisDir)
+}
+
+export async function updateStockAnalysisConfig(stockAnalysisDir: string, patch: Partial<StockAnalysisStrategyConfig>) {
+  const current = await readStockAnalysisConfig(stockAnalysisDir)
+  const next: StockAnalysisStrategyConfig = {
+    ...current,
+    ...patch,
+    marketThresholds: { ...current.marketThresholds, ...(patch.marketThresholds ?? {}) },
+    fusionWeightsByRegime: { ...current.fusionWeightsByRegime, ...(patch.fusionWeightsByRegime ?? {}) },
+    lowLiquidityGuardrail: { ...current.lowLiquidityGuardrail, ...(patch.lowLiquidityGuardrail ?? {}) },
+    trailingStop: { ...current.trailingStop, ...(patch.trailingStop ?? {}) },
+    portfolioRiskLimits: { ...current.portfolioRiskLimits, ...(patch.portfolioRiskLimits ?? {}) },
+  }
+
+  if (!Number.isFinite(next.intradayAutoCloseLossPercent) || next.intradayAutoCloseLossPercent <= 0 || next.intradayAutoCloseLossPercent > 100) {
+    throw new Error('盘中自动平仓亏损阈值必须在 0-100 之间')
+  }
+
+  await saveStockAnalysisConfig(stockAnalysisDir, next)
+  saLog.audit('Service', `stock analysis config updated: intradayAutoCloseLossPercent=${next.intradayAutoCloseLossPercent}`)
+  return next
 }
 
 export async function getStockAnalysisRuntimeStatusData(stockAnalysisDir: string) {

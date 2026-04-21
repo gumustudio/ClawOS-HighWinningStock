@@ -5,7 +5,7 @@
  * 1. buildFactPoolSummary: 从 FactPool 提取紧凑的文本摘要（注入 user message）
  * 2. buildExpertProfile: 从表现数据构建专家画像（注入 system message）
  * 3. buildMemoryContext: 组装专家的短/中/长期记忆文本（注入 user message）
- * 4. runDailyMemoryUpdate: 盘后更新记忆（写入当日条目、回填前日结果、LLM 压缩中期）
+ * 4. runDailyMemoryUpdate: 盘后更新记忆（写入当日条目、结算当日结果、LLM 压缩中期）
  */
 
 import { logger } from '../../utils/logger'
@@ -16,7 +16,9 @@ import {
   readExpertMemoryStore,
   readStockAnalysisQuoteCache,
   readStockAnalysisSignals,
+  readStockAnalysisExpertPerformance,
   saveExpertDailyMemories,
+  saveStockAnalysisExpertPerformance,
   saveExpertMemoryStore,
   withFileLock,
   MAX_SHORT_TERM_DAYS,
@@ -431,12 +433,11 @@ function formatMidTermMemory(midTerm: ExpertMidTermMemory): string {
 export async function runDailyMemoryUpdate(
   stockAnalysisDir: string,
   tradeDate: string,
-  previousTradeDate: string | null,
   aiConfig: StockAnalysisAIConfig,
 ): Promise<void> {
   const logTag = '[memory]'
   const startMs = Date.now()
-  saLog.info('memory', `开始盘后记忆更新 tradeDate=${tradeDate} previousTradeDate=${previousTradeDate ?? 'null'}`)
+  saLog.info('memory', `开始盘后记忆更新 tradeDate=${tradeDate}`)
 
   try {
     // Step 1: 从当日信号提取专家投票，写入 daily-memories
@@ -444,17 +445,11 @@ export async function runDailyMemoryUpdate(
     const todayEntries = extractMemoryEntriesFromSignals(signals, tradeDate)
 
     if (todayEntries.length > 0) {
-      await saveExpertDailyMemories(stockAnalysisDir, tradeDate, todayEntries)
-      logger.info(`${logTag} 写入 ${todayEntries.length} 条当日记忆条目 (${tradeDate})`, { module: 'StockAnalysis' })
+      const settledEntries = await settleTradeDateResults(stockAnalysisDir, todayEntries, signals)
+      await saveExpertDailyMemories(stockAnalysisDir, tradeDate, settledEntries)
+      await syncExpertPerformanceFromDailyMemory(stockAnalysisDir, tradeDate, settledEntries)
+      logger.info(`${logTag} 写入并结算 ${settledEntries.length} 条当日记忆条目 (${tradeDate})`, { module: 'StockAnalysis' })
     }
-
-    // Step 2: 回填前一日结果（1d 口径）
-    if (previousTradeDate) {
-      await backfillPreviousDayResults(stockAnalysisDir, previousTradeDate, signals)
-    }
-
-    // Step 2b: [v1.33.0 阶段 D] 回填 T-5 交易日的 5d 收益口径
-    await backfill5dResults(stockAnalysisDir, tradeDate, signals)
 
     // Step 3 & 4: 更新 memory-store（短期 + 中期压缩）
     await updateMemoryStore(stockAnalysisDir, tradeDate, aiConfig)
@@ -488,6 +483,8 @@ function extractMemoryEntriesFromSignals(
       entries.push({
         tradeDate,
         expertId: vote.expertId,
+        expertName: vote.expertName,
+        layer: vote.layer,
         code: signal.code,
         name: signal.name,
         verdict: vote.verdict,
@@ -502,24 +499,21 @@ function extractMemoryEntriesFromSignals(
   return entries
 }
 
-/** 回填前一日 daily-memories 的实际结果 */
-async function backfillPreviousDayResults(
+/** 用预测日当天收盘结果结算当日 daily-memories。 */
+async function settleTradeDateResults(
   stockAnalysisDir: string,
-  previousTradeDate: string,
-  todaySignals: StockAnalysisSignal[],
-): Promise<void> {
-  const prevEntries = await readExpertDailyMemories(stockAnalysisDir, previousTradeDate)
-  if (prevEntries.length === 0) return
-
-  // 构建今日价格涨跌表（用 signal 的 changePercent）
+  entries: ExpertDailyMemoryEntry[],
+  signals: StockAnalysisSignal[],
+): Promise<ExpertDailyMemoryEntry[]> {
   const changeMap = new Map<string, number>()
-  for (const signal of todaySignals) {
-    changeMap.set(signal.code, signal.latestPrice !== 0 ? signal.snapshot.changePercent : 0)
+  for (const signal of signals) {
+    const settledChange = signal.realtime?.changePercent ?? signal.snapshot.changePercent
+    changeMap.set(signal.code, Number.isFinite(settledChange) ? settledChange : 0)
   }
 
-  // [L2] 补充 quote cache 中的股票涨跌数据，覆盖不在今日信号中的昨日预测股票
+  // 用 quote cache 补齐未进 signals 的股票收盘涨跌幅
   const missingCodes = new Set<string>()
-  for (const entry of prevEntries) {
+  for (const entry of entries) {
     if (entry.actualReturnNextDay !== null) continue
     if (!changeMap.has(entry.code)) missingCodes.add(entry.code)
   }
@@ -533,14 +527,15 @@ async function backfillPreviousDayResults(
           }
         }
       }
-      logger.info(`[memory] 从 quote cache 补充 ${missingCodes.size - [...missingCodes].filter(c => !changeMap.has(c)).length} 条回填数据`, { module: 'StockAnalysis' })
-    } catch {
+        logger.info(`[memory] 从 quote cache 补充 ${missingCodes.size - [...missingCodes].filter((code) => !changeMap.has(code)).length} 条当日结算数据`, { module: 'StockAnalysis' })
+      } catch {
       // quote cache 不可用时静默降级，只用信号中的数据
     }
   }
 
-  let updated = 0
-  for (const entry of prevEntries) {
+  const nextEntries = entries.map((entry) => ({ ...entry }))
+  let settled = 0
+  for (const entry of nextEntries) {
     if (entry.actualReturnNextDay !== null) continue // 已回填
 
     const actualReturn = changeMap.get(entry.code)
@@ -551,89 +546,85 @@ async function backfillPreviousDayResults(
     entry.wasCorrect = (entry.verdict === 'bullish' && actualReturn > 0)
       || (entry.verdict === 'bearish' && actualReturn < 0)
       || (entry.verdict === 'neutral' && Math.abs(actualReturn) < 0.5)
-    updated++
+    settled++
   }
 
-  if (updated > 0) {
-    await saveExpertDailyMemories(stockAnalysisDir, previousTradeDate, prevEntries)
-    logger.info(`[memory] 回填 ${updated} 条前日记忆结果 (${previousTradeDate})`, { module: 'StockAnalysis' })
-  }
+  logger.info(`[memory] 结算 ${settled} 条当日记忆结果`, { module: 'StockAnalysis' })
+  return nextEntries
 }
 
-/**
- * [v1.33.0 阶段 D] 回填 T-5 交易日预测的 5d 收益口径。
- * 读取 5 个交易日前的 daily-memories，对每一条未回填 actualReturn5d 的条目：
- *   - 读取 T 日的 signals 获取基准收盘价 (signal.latestPrice)
- *   - 今日 signals/quote cache 提供 T+5 收盘价
- *   - 计算相对收益并判断正误（阈值与 1d 相同：neutral |return|<0.5%，否则看方向）
- */
-async function backfill5dResults(
+async function syncExpertPerformanceFromDailyMemory(
   stockAnalysisDir: string,
-  todayTradeDate: string,
-  todaySignals: StockAnalysisSignal[],
+  tradeDate: string,
+  entries: ExpertDailyMemoryEntry[],
 ): Promise<void> {
-  // 计算 T-5（按交易日历）
-  // getRecentTradeDates 返回 [T, T-1, T-2, ...] 所以取 index=5
-  const recentDates = getRecentTradeDates(todayTradeDate, 7)
-  if (recentDates.length < 6) return
-  const targetDate = recentDates[5] // T-5
+  const settledEntries = entries.filter((entry) => entry.actualReturnNextDay !== null && entry.wasCorrect !== null)
+  if (settledEntries.length === 0) return
 
-  const targetEntries = await readExpertDailyMemories(stockAnalysisDir, targetDate)
-  if (targetEntries.length === 0) return
+  const existing = await readStockAnalysisExpertPerformance(stockAnalysisDir)
+  const entryMap = new Map(existing.entries.map((entry) => [entry.expertId, { ...entry, recentOutcomes: [...entry.recentOutcomes] }]))
 
-  // 只处理还没回填 5d 的条目
-  const pending = targetEntries.filter((e) => e.actualReturn5d === undefined || e.actualReturn5d === null)
-  if (pending.length === 0) return
+  for (const memoryEntry of settledEntries) {
+    const predictionReturn = memoryEntry.actualReturnNextDay ?? 0
+    const correct = Boolean(memoryEntry.wasCorrect)
+    const performanceEntry = entryMap.get(memoryEntry.expertId)
+    const outcomeKey = `${tradeDate}:${memoryEntry.code}:${memoryEntry.verdict}`
 
-  // 今日价格表
-  const todayPriceMap = new Map<string, number>()
-  for (const s of todaySignals) {
-    if (s.latestPrice > 0) todayPriceMap.set(s.code, s.latestPrice)
-  }
-  const missingCodes = new Set<string>()
-  for (const e of pending) {
-    if (!todayPriceMap.has(e.code)) missingCodes.add(e.code)
-  }
-  if (missingCodes.size > 0) {
-    try {
-      const cache = await readStockAnalysisQuoteCache(stockAnalysisDir)
-      if (cache?.quotes) {
-        for (const q of cache.quotes) {
-          if (missingCodes.has(q.code) && q.latestPrice > 0) {
-            todayPriceMap.set(q.code, q.latestPrice)
-          }
-        }
-      }
-    } catch {
-      // 静默降级
+    const outcome = {
+      tradeDate,
+      code: memoryEntry.code,
+      verdict: memoryEntry.verdict,
+      confidence: memoryEntry.confidence,
+      actualReturnPercent: Number(predictionReturn.toFixed(4)),
+      correct,
+      source: 'daily_close' as const,
+    }
+
+    if (performanceEntry) {
+      const alreadySynced = performanceEntry.recentOutcomes.some((item) => `${item.tradeDate}:${item.code}:${item.verdict}` === outcomeKey && item.source === 'daily_close')
+      if (alreadySynced) continue
+
+      performanceEntry.predictionCount += 1
+      if (correct) performanceEntry.correctCount += 1
+      performanceEntry.winRate = Number((performanceEntry.correctCount / performanceEntry.predictionCount).toFixed(4))
+      performanceEntry.averageConfidence = Number((((performanceEntry.averageConfidence * (performanceEntry.predictionCount - 1)) + memoryEntry.confidence) / performanceEntry.predictionCount).toFixed(4))
+      performanceEntry.calibration = Number(Math.abs(performanceEntry.averageConfidence / 100 - performanceEntry.winRate).toFixed(4))
+      performanceEntry.lastPredictionDate = tradeDate
+      performanceEntry.recentOutcomes = [outcome, ...performanceEntry.recentOutcomes].slice(0, 50)
+    } else {
+      entryMap.set(memoryEntry.expertId, {
+        expertId: memoryEntry.expertId,
+        expertName: memoryEntry.expertName ?? memoryEntry.expertId,
+        layer: memoryEntry.layer ?? 'rule_functions',
+        predictionCount: 1,
+        correctCount: correct ? 1 : 0,
+        winRate: correct ? 1 : 0,
+        averageConfidence: memoryEntry.confidence,
+        calibration: Number(Math.abs(memoryEntry.confidence / 100 - (correct ? 1 : 0)).toFixed(4)),
+        weight: 1,
+        lastPredictionDate: tradeDate,
+        recentOutcomes: [outcome],
+      })
     }
   }
 
-  // T-5 日基准价格表
-  const baseSignals = await readStockAnalysisSignals(stockAnalysisDir, targetDate)
-  const basePriceMap = new Map<string, number>()
-  for (const s of baseSignals) {
-    if (s.latestPrice > 0) basePriceMap.set(s.code, s.latestPrice)
-  }
+  const updatedEntries = Array.from(entryMap.values()).map((entry) => {
+    const baseWeight = entry.predictionCount < 5 ? 1 : 1.0 + (entry.winRate - 0.5) * 2.0
+    const latestDate = entry.recentOutcomes[0]?.tradeDate
+    const ageDays = latestDate ? Math.max(0, (Date.now() - new Date(latestDate).getTime()) / 86400000) : 0
+    const decayFactor = Math.pow(2, -ageDays / 60)
+    const weight = baseWeight * (0.5 + 0.5 * decayFactor)
+    return {
+      ...entry,
+      weight: Number(Math.max(0.1, Math.min(2.0, weight)).toFixed(4)),
+    }
+  })
 
-  let updated = 0
-  for (const entry of pending) {
-    const todayPrice = todayPriceMap.get(entry.code)
-    const basePrice = basePriceMap.get(entry.code)
-    if (!todayPrice || !basePrice || basePrice <= 0) continue
-
-    const return5d = ((todayPrice - basePrice) / basePrice) * 100
-    entry.actualReturn5d = return5d
-    entry.wasCorrect5d = (entry.verdict === 'bullish' && return5d > 0)
-      || (entry.verdict === 'bearish' && return5d < 0)
-      || (entry.verdict === 'neutral' && Math.abs(return5d) < 0.5)
-    updated++
-  }
-
-  if (updated > 0) {
-    await saveExpertDailyMemories(stockAnalysisDir, targetDate, targetEntries)
-    logger.info(`[memory] 回填 ${updated} 条 T-5 记忆结果 (targetDate=${targetDate})`, { module: 'StockAnalysis' })
-  }
+  await saveStockAnalysisExpertPerformance(stockAnalysisDir, {
+    updatedAt: new Date().toISOString(),
+    entries: updatedEntries,
+  })
+  logger.info(`[memory] 已将 ${settledEntries.length} 条当日结算结果同步到 expert-performance (${tradeDate})`, { module: 'StockAnalysis' })
 }
 
 /** 更新 memory-store：整合短期记忆，必要时 LLM 压缩中期 */
@@ -1294,5 +1285,5 @@ export const _testing = {
   parseLongTermResponse,
   mergeLongTermMemory,
   buildLongTermStatistical,
-  backfill5dResults,
+  settleTradeDateResults,
 }

@@ -283,6 +283,7 @@ const baseConfig: StockAnalysisStrategyConfig = {
   maxSinglePosition: 0.3,
   maxTotalPosition: 0.85,
   stopLossPercent: 3,
+  intradayAutoCloseLossPercent: 5,
   takeProfitPercent1: 3,
   takeProfitPercent2: 6,
   maxHoldDays: 20,
@@ -309,8 +310,8 @@ test('buildDailyAdviceSummary returns buy sell watch sections and summary', () =
 
 test('buildWeeklyDashboardSummary derives alerts and tuning suggestions', () => {
   const summary = buildWeeklyDashboardSummary(baseOverview, baseConfig)
-  assert.equal(summary.bestGroup, 'Claude 组')
-  assert.equal(summary.worstGroup, 'Qwen 组')
+  assert.equal(summary.bestGroup, 'claude')
+  assert.equal(summary.worstGroup, 'qwen')
   assert.match(summary.alerts.join(' | '), /Qwen 组近期表现较弱/)
   assert.match(summary.tuningSuggestions.join(' | '), /qwen 组权重/)
   // override stats

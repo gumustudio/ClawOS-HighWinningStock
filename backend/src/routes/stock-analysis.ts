@@ -18,6 +18,7 @@ import {
   generateWeeklyReport,
   getStockAnalysisAIConfig,
   getStockAnalysisConfig,
+  updateStockAnalysisConfig,
   getStockAnalysisHealthStatus,
   getStockAnalysisMonthlyReports,
   getStockAnalysisNotifications,
@@ -190,6 +191,24 @@ router.get('/config', async (_req, res) => {
     res.json({ success: true, data })
   } catch (error) {
     logger.error(`AI 炒股 config 失败: ${(error as Error).message}`, { module: 'StockAnalysis' })
+    res.status(500).json({ success: false, error: sanitizeErrorMessage(error) })
+  }
+})
+
+router.put('/config', async (req, res) => {
+  try {
+    const rawValue = req.body?.intradayAutoCloseLossPercent
+    const nextValue = Number(rawValue)
+    if (!Number.isFinite(nextValue)) {
+      res.status(400).json({ success: false, error: '盘中自动平仓亏损阈值必须是数字' })
+      return
+    }
+    const data = await updateStockAnalysisConfig(await getStockAnalysisDir(), {
+      intradayAutoCloseLossPercent: nextValue,
+    })
+    res.json({ success: true, data })
+  } catch (error) {
+    logger.error(`AI 炒股 update config 失败: ${(error as Error).message}`, { module: 'StockAnalysis' })
     res.status(500).json({ success: false, error: sanitizeErrorMessage(error) })
   }
 })

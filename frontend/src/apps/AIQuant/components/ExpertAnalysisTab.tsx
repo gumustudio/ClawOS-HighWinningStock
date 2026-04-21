@@ -315,7 +315,7 @@ export function ExpertAnalysisTab() {
                       <th className="px-3 py-2">判断</th>
                       <th className="px-3 py-2">信心</th>
                       <th className="px-3 py-2">理由</th>
-                      <th className="px-3 py-2">次日收益</th>
+                      <th className="px-3 py-2">当日结算</th>
                       <th className="px-3 py-2">正确</th>
                     </tr>
                   </thead>

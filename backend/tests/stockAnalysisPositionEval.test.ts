@@ -13,6 +13,7 @@ import type {
 // 使用 _testing 导出进行单元测试
 import { _testing } from '../src/services/stock-analysis/service'
 const { evaluatePositionScores, buildSwapSuggestions } = _testing
+const { getAdjustedFusionWeights } = _testing
 
 function createMockMarketState(overrides?: Partial<StockAnalysisMarketState>): StockAnalysisMarketState {
   return {
@@ -377,4 +378,38 @@ test('buildSwapSuggestions: 新信号优势不足时不生成换仓建议', () =
 
   const result = buildSwapSuggestions(evaluations, signals, 3, 3)
   assert.equal(result.length, 0, '优势不足时不应生成换仓建议')
+})
+
+test('getAdjustedFusionWeights: 专家权重不会被学习结果压到 25% 以下', () => {
+  const adjusted = getAdjustedFusionWeights(
+    { expert: 0.35, technical: 0.35, quant: 0.3 },
+    {
+      updatedAt: '2026-04-21T00:00:00.000Z',
+      sampleCount: 10,
+      dimensionAccuracy: { expert: 0.1058, technical: 0.422, quant: 0.6221 },
+      adjustmentFactors: { expert: -0.2129, technical: 0.0258, quant: 0.1871 },
+      history: [],
+    },
+  )
+
+  assert.equal(adjusted.expert, 0.25)
+  assert.ok(Math.abs(adjusted.technical + adjusted.quant - 0.75) < 0.0001)
+  assert.ok(Math.abs(adjusted.expert + adjusted.technical + adjusted.quant - 1) < 0.0002)
+})
+
+test('getAdjustedFusionWeights: 专家权重不会被学习结果抬到 45% 以上', () => {
+  const adjusted = getAdjustedFusionWeights(
+    { expert: 0.35, technical: 0.35, quant: 0.3 },
+    {
+      updatedAt: '2026-04-21T00:00:00.000Z',
+      sampleCount: 12,
+      dimensionAccuracy: { expert: 0.9, technical: 0.4, quant: 0.2 },
+      adjustmentFactors: { expert: 0.2, technical: -0.1, quant: -0.1 },
+      history: [],
+    },
+  )
+
+  assert.equal(adjusted.expert, 0.45)
+  assert.ok(Math.abs(adjusted.technical + adjusted.quant - 0.55) < 0.0001)
+  assert.ok(Math.abs(adjusted.expert + adjusted.technical + adjusted.quant - 1) < 0.0002)
 })

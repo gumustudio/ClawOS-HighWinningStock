@@ -87,6 +87,14 @@ export function fetchStockAnalysisConfig() {
   return requestJson<StockAnalysisStrategyConfig>('/api/system/stock-analysis/config')
 }
 
+export function saveStockAnalysisConfig(config: { intradayAutoCloseLossPercent: number }) {
+  return requestJson<StockAnalysisStrategyConfig>('/api/system/stock-analysis/config', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(config),
+  })
+}
+
 export function fetchStockAnalysisSignals() {
   return requestJson<StockAnalysisSignal[]>('/api/system/stock-analysis/signals')
 }

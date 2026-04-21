@@ -389,6 +389,7 @@ export interface StockAnalysisStrategyConfig {
   maxSinglePosition: number
   maxTotalPosition: number
   stopLossPercent: number
+  intradayAutoCloseLossPercent: number
   takeProfitPercent1: number
   takeProfitPercent2: number
   maxHoldDays: number
@@ -1032,7 +1033,9 @@ export interface ExpertDailyMemoryEntry {
   verdict: 'bullish' | 'bearish' | 'neutral'
   confidence: number
   reason: string
+  /** 历史字段名沿用：现语义为预测日当天收盘结算收益率 */
   actualReturnNextDay: number | null
+  /** 历史字段名沿用：现语义为预测日当天收盘结算是否正确 */
   wasCorrect: boolean | null
 }
 

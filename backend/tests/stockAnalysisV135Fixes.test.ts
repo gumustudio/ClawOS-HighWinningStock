@@ -24,21 +24,42 @@ import {
   saveStockAnalysisPositions,
   readStockAnalysisPositions,
   saveStockAnalysisTrades,
+  readStockAnalysisTrades,
   saveStockAnalysisRuntimeStatus,
   readStockAnalysisRuntimeStatus,
   saveStockAnalysisConfig,
+  saveStockAnalysisQuoteCache,
+  saveIntradayMonitorStatus,
 } from '../src/services/stock-analysis/store'
 import {
   closeStockAnalysisPosition,
   reduceStockAnalysisPosition,
   dismissPositionAction,
   confirmStockAnalysisSignal,
+  pollIntradayOnce,
 } from '../src/services/stock-analysis/service'
 import type {
   StockAnalysisSignal,
   StockAnalysisPosition,
   StockAnalysisRuntimeStatus,
 } from '../src/services/stock-analysis/types'
+
+function mockNow(isoString: string) {
+  const RealDate = Date
+  class MockDate extends RealDate {
+    constructor(value?: string | number | Date) {
+      super(value ?? isoString)
+    }
+
+    static override now() {
+      return new RealDate(isoString).getTime()
+    }
+  }
+  global.Date = MockDate as DateConstructor
+  return () => {
+    global.Date = RealDate
+  }
+}
 
 async function createTempDir(): Promise<string> {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'clawos-v135-'))
@@ -380,4 +401,191 @@ test('[A2-P0-1] close 后再 readPositions 不会因任何路径复活', async (
 
   const after = await readStockAnalysisPositions(dir)
   assert.equal(after.length, 0, '平仓后持仓表应为空')
+})
+
+test('[intraday-auto-close] 交易时段内亏损超过 5% 自动平仓', async () => {
+  const dir = await createTempDir()
+  const restoreDate = mockNow('2026-04-22T10:05:00.000+08:00')
+  try {
+    await setupRuntimeStatus(dir, false)
+    await saveStockAnalysisConfig(dir, {
+      maxPositions: 10,
+      maxSinglePosition: 0.3,
+      maxTotalPosition: 1,
+      stopLossPercent: 3,
+      intradayAutoCloseLossPercent: 5,
+      takeProfitPercent1: 10,
+      takeProfitPercent2: 20,
+      blacklist: [],
+      maxHoldDays: 20,
+      portfolioRiskLimits: { maxDailyLossPercent: 3, maxWeeklyLossPercent: 6, maxMonthlyLossPercent: 10, maxDrawdownPercent: 15 },
+    } as any)
+    const position = buildPosition({
+      id: 'position-auto-close-1',
+      code: '600519',
+      openDate: '2026-04-21',
+      openedAt: '2026-04-21T01:30:00.000Z',
+      costPrice: 100,
+      currentPrice: 100,
+    })
+    await saveStockAnalysisPositions(dir, [position])
+    await saveStockAnalysisTrades(dir, [])
+    await saveStockAnalysisQuoteCache(dir, {
+      fetchedAt: new Date().toISOString(),
+      quotes: [{
+        code: '600519',
+        name: '贵州茅台',
+        latestPrice: 94.9,
+        changePercent: -5.1,
+        turnoverRate: 1,
+        open: 100,
+        high: 100.5,
+        low: 94.5,
+        previousClose: 100,
+        totalMarketCap: 1,
+        circulatingMarketCap: 1,
+      }],
+    } as any)
+    await saveIntradayMonitorStatus(dir, {
+      state: 'running',
+      lastPollAt: null,
+      pollCount: 0,
+      alerts: [],
+      startedAt: new Date().toISOString(),
+    })
+
+    await pollIntradayOnce(dir)
+
+    const positionsAfter = await readStockAnalysisPositions(dir)
+    const tradesAfter = await readStockAnalysisTrades(dir)
+    assert.equal(positionsAfter.length, 0, '交易时段内跌破 -5% 应自动平仓')
+    assert.equal(tradesAfter.length, 1, '自动平仓应写入 sell 交易记录')
+    assert.match(tradesAfter[0].note ?? '', /自动止损平仓|超过 5% 阈值/)
+  } finally {
+    restoreDate()
+  }
+})
+
+test('[intraday-auto-close] 非交易时段亏损超过 5% 不自动平仓', async () => {
+  const dir = await createTempDir()
+  const restoreDate = mockNow('2026-04-22T15:05:00.000+08:00')
+  try {
+    await setupRuntimeStatus(dir, false)
+    await saveStockAnalysisConfig(dir, {
+      maxPositions: 10,
+      maxSinglePosition: 0.3,
+      maxTotalPosition: 1,
+      stopLossPercent: 3,
+      intradayAutoCloseLossPercent: 5,
+      takeProfitPercent1: 10,
+      takeProfitPercent2: 20,
+      blacklist: [],
+      maxHoldDays: 20,
+      portfolioRiskLimits: { maxDailyLossPercent: 3, maxWeeklyLossPercent: 6, maxMonthlyLossPercent: 10, maxDrawdownPercent: 15 },
+    } as any)
+    const position = buildPosition({
+      id: 'position-auto-close-2',
+      code: '600519',
+      openDate: '2026-04-21',
+      openedAt: '2026-04-21T01:30:00.000Z',
+      costPrice: 100,
+      currentPrice: 100,
+    })
+    await saveStockAnalysisPositions(dir, [position])
+    await saveStockAnalysisTrades(dir, [])
+    await saveStockAnalysisQuoteCache(dir, {
+      fetchedAt: new Date().toISOString(),
+      quotes: [{
+        code: '600519',
+        name: '贵州茅台',
+        latestPrice: 94.9,
+        changePercent: -5.1,
+        turnoverRate: 1,
+        open: 100,
+        high: 100.5,
+        low: 94.5,
+        previousClose: 100,
+        totalMarketCap: 1,
+        circulatingMarketCap: 1,
+      }],
+    } as any)
+    await saveIntradayMonitorStatus(dir, {
+      state: 'running',
+      lastPollAt: null,
+      pollCount: 0,
+      alerts: [],
+      startedAt: new Date().toISOString(),
+    })
+
+    await pollIntradayOnce(dir)
+
+    const positionsAfter = await readStockAnalysisPositions(dir)
+    const tradesAfter = await readStockAnalysisTrades(dir)
+    assert.equal(positionsAfter.length, 1, '非交易时段不应自动平仓')
+    assert.equal(tradesAfter.length, 0, '非交易时段不应写入自动卖出记录')
+  } finally {
+    restoreDate()
+  }
+})
+
+test('[intraday-auto-close] 使用配置项阈值，不再写死 5%', async () => {
+  const dir = await createTempDir()
+  const restoreDate = mockNow('2026-04-22T10:10:00.000+08:00')
+  try {
+    await setupRuntimeStatus(dir, false)
+    await saveStockAnalysisConfig(dir, {
+      maxPositions: 10,
+      maxSinglePosition: 0.3,
+      maxTotalPosition: 1,
+      stopLossPercent: 3,
+      intradayAutoCloseLossPercent: 7,
+      takeProfitPercent1: 10,
+      takeProfitPercent2: 20,
+      blacklist: [],
+      maxHoldDays: 20,
+      portfolioRiskLimits: { maxDailyLossPercent: 3, maxWeeklyLossPercent: 6, maxMonthlyLossPercent: 10, maxDrawdownPercent: 15 },
+    } as any)
+    const position = buildPosition({
+      id: 'position-auto-close-3',
+      code: '600519',
+      openDate: '2026-04-21',
+      openedAt: '2026-04-21T01:30:00.000Z',
+      costPrice: 100,
+      currentPrice: 100,
+    })
+    await saveStockAnalysisPositions(dir, [position])
+    await saveStockAnalysisTrades(dir, [])
+    await saveStockAnalysisQuoteCache(dir, {
+      fetchedAt: new Date().toISOString(),
+      quotes: [{
+        code: '600519',
+        name: '贵州茅台',
+        latestPrice: 94.9,
+        changePercent: -5.1,
+        turnoverRate: 1,
+        open: 100,
+        high: 100.5,
+        low: 94.5,
+        previousClose: 100,
+        totalMarketCap: 1,
+        circulatingMarketCap: 1,
+      }],
+    } as any)
+    await saveIntradayMonitorStatus(dir, {
+      state: 'running',
+      lastPollAt: null,
+      pollCount: 0,
+      alerts: [],
+      startedAt: new Date().toISOString(),
+    })
+
+    await pollIntradayOnce(dir)
+
+    const positionsAfter = await readStockAnalysisPositions(dir)
+    const tradesAfter = await readStockAnalysisTrades(dir)
+    assert.equal(positionsAfter.length, 1, '阈值调到 7% 后，-5.1% 不应自动平仓')
+    assert.equal(tradesAfter.length, 0, '未达到配置阈值时不应写入卖出记录')
+  } finally {
+    restoreDate()
+  }
 })

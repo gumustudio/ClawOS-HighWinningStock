@@ -85,11 +85,18 @@ test('[A5-P0-1] runMorningSupplementAnalysis 并发调用只执行一次', async
 
 test('[A6-P0-1] CORS 白名单应允许 localhost/127.0.0.1 和 Tailscale *.ts.net', () => {
   const WHITELIST = ['http://localhost:5173', 'http://localhost:3001', 'http://127.0.0.1:5173', 'http://127.0.0.1:3001']
-  const TS_NET_REGEX = /^https?:\/\/[\w-]+\.ts\.net$/
   const shouldAllow = (origin: string | undefined) => {
     if (!origin) return true
     if (WHITELIST.includes(origin)) return true
-    if (TS_NET_REGEX.test(origin) || origin.startsWith('http://localhost')) return true
+    if (origin.startsWith('http://localhost')) return true
+    try {
+      const parsed = new URL(origin)
+      if (parsed.hostname === 'ts.net' || parsed.hostname.endsWith('.ts.net')) {
+        return true
+      }
+    } catch {
+      return false
+    }
     return false
   }
 
@@ -97,8 +104,10 @@ test('[A6-P0-1] CORS 白名单应允许 localhost/127.0.0.1 和 Tailscale *.ts.n
   assert.equal(shouldAllow('http://localhost:5173'), true, 'dev 前端允许')
   assert.equal(shouldAllow('http://127.0.0.1:3001'), true, '本机 API 允许')
   assert.equal(shouldAllow('https://my-tailnet.ts.net'), true, 'Tailscale 允许')
+  assert.equal(shouldAllow('https://chriswong-maco.tail7d4b86.ts.net'), true, '多级 Tailscale 域名允许')
   assert.equal(shouldAllow('http://evil.com'), false, '非白名单外域拒绝')
   assert.equal(shouldAllow('https://malicious.tailscale-fake.com'), false, '伪造 ts.net 拒绝')
+  assert.equal(shouldAllow('https://ts.net.evil.com'), false, 'ts.net 伪装后缀拒绝')
 })
 
 // ───────────────────────────────────────────────────────

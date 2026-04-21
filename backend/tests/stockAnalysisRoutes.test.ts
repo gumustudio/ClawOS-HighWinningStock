@@ -36,6 +36,7 @@ test('stock analysis routes expose config path and runtime overview using persis
         maxSinglePosition: 0.3,
         maxTotalPosition: 0.85,
         stopLossPercent: 3,
+        intradayAutoCloseLossPercent: 5,
         takeProfitPercent1: 3,
         takeProfitPercent2: 6,
         maxHoldDays: 20,
@@ -238,6 +239,16 @@ test('stock analysis routes expose config path and runtime overview using persis
     assert.equal(configResponse.status, 200)
     assert.equal(configResponse.body.success, true)
     assert.equal(configResponse.body.data.maxPositions, 3)
+
+    const updateConfigResponse = await request(app)
+      .put('/api/system/stock-analysis/config')
+      .send({ intradayAutoCloseLossPercent: 6.5 })
+    assert.equal(updateConfigResponse.status, 200)
+    assert.equal(updateConfigResponse.body.success, true)
+    assert.equal(updateConfigResponse.body.data.intradayAutoCloseLossPercent, 6.5)
+
+    const persistedConfig = JSON.parse(await fs.readFile(path.join(stockAnalysisDir, 'config', 'strategy.json'), 'utf8'))
+    assert.equal(persistedConfig.intradayAutoCloseLossPercent, 6.5)
   } finally {
     process.env.HOME = originalHome
     await fs.rm(tempHome, { recursive: true, force: true })
