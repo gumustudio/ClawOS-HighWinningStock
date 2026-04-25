@@ -390,6 +390,7 @@ export interface StockAnalysisStrategyConfig {
   maxTotalPosition: number
   stopLossPercent: number
   intradayAutoCloseLossPercent: number
+  intradayAutoCloseProfitPercent: number
   takeProfitPercent1: number
   takeProfitPercent2: number
   maxHoldDays: number
@@ -758,7 +759,7 @@ export interface SupportResistanceLevels {
 
 /** 市场级风控状态 */
 export interface MarketLevelRiskState {
-  /** 极端熊市：20日跌幅>10%，暂停所有新开仓 */
+  /** 极端熊市：20日跌幅>10%，限制新开仓 */
   extremeBearActive: boolean
   /** 极端波动：波动率>95th百分位，仓位上限降至50% */
   extremeVolatilityActive: boolean

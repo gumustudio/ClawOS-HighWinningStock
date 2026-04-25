@@ -141,7 +141,7 @@ export function riskEventTypeLabel(eventType: StockAnalysisRiskEventType): strin
     case 'weekly_loss_breached': return '周度亏损触发'
     case 'monthly_loss_breached': return '月度亏损触发'
     case 'max_drawdown_breached': return '最大回撤触发'
-    case 'pause_triggered': return '暂停交易'
+    case 'pause_triggered': return '新开仓限制触发'
     case 'trailing_stop_triggered': return '移动止损触发'
     case 'veto_max_positions': return '否决: 仓位已满'
     case 'veto_blacklist': return '否决: 黑名单'

@@ -21,9 +21,9 @@ import {
 
 /* ---------- 默认阈值（当 riskLimits 未提供时使用） ---------- */
 const DEFAULT_LIMITS: StockAnalysisPortfolioRiskLimits = {
-  maxDailyLossPercent: 3,
-  maxWeeklyLossPercent: 6,
-  maxMonthlyLossPercent: 10,
+  maxDailyLossPercent: 10,
+  maxWeeklyLossPercent: 20,
+  maxMonthlyLossPercent: 30,
   maxDrawdownPercent: 15,
 }
 
@@ -61,7 +61,7 @@ function MarketLevelRiskPanel({ risk }: { risk: MarketLevelRiskState | null | un
   const items: Array<{ label: string; description: string; active: boolean }> = [
     {
       label: '极端熊市',
-      description: risk.extremeBearActive ? '20日跌幅>10%，暂停新开仓' : '20日跌幅正常',
+      description: risk.extremeBearActive ? '20日跌幅>10%，限制新开仓' : '20日跌幅正常',
       active: risk.extremeBearActive,
     },
     {
@@ -84,7 +84,7 @@ function MarketLevelRiskPanel({ risk }: { risk: MarketLevelRiskState | null | un
           <h3 className="font-semibold text-slate-700 text-sm">市场级风控</h3>
         </div>
         <span className={`text-xs font-medium px-1.5 py-0.5 rounded ${headerBadge}`}>
-          {anyActive ? '触发限制' : '正常'}
+          {anyActive ? '开仓受限' : '正常'}
         </span>
       </div>
       <div className="p-3 space-y-2.5">
@@ -133,9 +133,9 @@ function PreTradePanel({ overview }: { overview: StockAnalysisOverview }) {
       detail: isFull ? `持仓已满 (${currentPositions}/${maxPositions})` : `${currentPositions}/${maxPositions}`,
     },
     {
-      label: '交易暂停',
+      label: '新开仓限制',
       ok: !isPaused,
-      detail: isPaused ? `已暂停` : '未暂停',
+      detail: isPaused ? '已限制' : '未限制',
     },
     {
       label: '风控阈值',
@@ -177,7 +177,7 @@ function SystemRiskPanel({ riskControl, limits }: { riskControl: StockAnalysisRi
 
   const anyBreached = rc.dailyLossBreached || rc.weeklyLossBreached || rc.monthlyLossBreached || rc.maxDrawdownBreached
   const statusColor = rc.paused ? 'border-red-300 bg-red-50/50' : anyBreached ? 'border-amber-300 bg-amber-50/50' : 'border-green-200 bg-green-50/30'
-  const statusText = rc.paused ? '已暂停' : anyBreached ? '部分触发' : '正常'
+  const statusText = rc.paused ? '新开仓受限' : anyBreached ? '部分触发' : '正常'
   const statusDot = rc.paused ? 'bg-red-500' : anyBreached ? 'bg-amber-500' : 'bg-green-500'
 
   return (
@@ -194,7 +194,7 @@ function SystemRiskPanel({ riskControl, limits }: { riskControl: StockAnalysisRi
       <div className="p-3 space-y-2.5">
         {rc.paused ? (
           <div className="bg-red-100 text-red-700 text-xs p-2.5 rounded-lg">
-            <p className="font-bold">交易已暂停</p>
+            <p className="font-bold">组合风控已限制新开仓</p>
             <p className="mt-0.5">{rc.pauseReason}</p>
           </div>
         ) : null}
@@ -435,7 +435,7 @@ export function RiskTab({ overview, onClosePosition, onReducePosition, actionLoa
   const riskEvents = overview.riskEvents ?? []
 
   const pauseSuggestion = riskControl?.paused
-    ? `已暂停: ${riskControl.pauseReason ?? '请检查风控状态'}`
+    ? `当前处于组合风控限制：${riskControl.pauseReason ?? '请检查风控状态'}`
     : overview.stats.maxDrawdown <= -10
       ? '接近月度阈值，建议防守或清仓。'
       : overview.marketState.trend === 'bear_trend'

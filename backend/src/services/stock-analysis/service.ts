@@ -2277,7 +2277,7 @@ async function buildSignal(snapshot: StockAnalysisStockSnapshot, marketState: St
   const vetoReasons: string[] = []
   const watchReasons: string[] = []
 
-  if (marketState.trend === 'bear_trend' && marketState.csi500Return20d < -10) vetoReasons.push('极端熊市（20日跌幅>10%），暂停所有新开仓')
+  if (marketState.trend === 'bear_trend' && marketState.csi500Return20d < -10) vetoReasons.push('极端熊市（20日跌幅>10%），限制新开仓')
   if (marketState.volatility === 'high_volatility' && (marketState.volatilityPercentile ?? 0) > 0.95) vetoReasons.push('极端波动（波动率>95th百分位），仓位上限降至50%')
   const liquidityExplanation = describeMarketLiquidityState(marketState, config)
   if (isLiquidityCrisis(marketState, config)) {
@@ -2571,6 +2571,14 @@ interface AssessPortfolioRiskResult {
   newEvents: StockAnalysisRiskEvent[]
 }
 
+type StockAnalysisConfigPatch = Partial<Omit<StockAnalysisStrategyConfig, 'marketThresholds' | 'fusionWeightsByRegime' | 'lowLiquidityGuardrail' | 'trailingStop' | 'portfolioRiskLimits'>> & {
+  marketThresholds?: Partial<StockAnalysisStrategyConfig['marketThresholds']>
+  fusionWeightsByRegime?: Partial<NonNullable<StockAnalysisStrategyConfig['fusionWeightsByRegime']>>
+  lowLiquidityGuardrail?: Partial<NonNullable<StockAnalysisStrategyConfig['lowLiquidityGuardrail']>>
+  trailingStop?: Partial<NonNullable<StockAnalysisStrategyConfig['trailingStop']>>
+  portfolioRiskLimits?: Partial<StockAnalysisPortfolioRiskLimits>
+}
+
 function assessPortfolioRisk(
   trades: StockAnalysisTradeRecord[],
   limits: StockAnalysisPortfolioRiskLimits,
@@ -2682,6 +2690,23 @@ function assessPortfolioRisk(
     },
     newEvents,
   }
+}
+
+async function recomputeRiskControlState(stockAnalysisDir: string, limits: StockAnalysisPortfolioRiskLimits) {
+  const [trades, runtimeStatus, existingEvents] = await Promise.all([
+    readStockAnalysisTrades(stockAnalysisDir),
+    readStockAnalysisRuntimeStatus(stockAnalysisDir),
+    readStockAnalysisRiskEvents(stockAnalysisDir),
+  ])
+
+  const riskResult = assessPortfolioRisk(trades, limits, runtimeStatus.riskControl)
+  await saveStockAnalysisRuntimeStatus(stockAnalysisDir, { ...runtimeStatus, riskControl: riskResult.state })
+
+  if (riskResult.newEvents.length > 0) {
+    await saveStockAnalysisRiskEvents(stockAnalysisDir, [...riskResult.newEvents, ...existingEvents])
+  }
+
+  return riskResult.state
 }
 
 async function buildReviewRecord(
@@ -3438,14 +3463,15 @@ function hasModelGroupPerformanceSamples(expertPerformance?: StockAnalysisExpert
 
 async function resolveModelGroupPerformance(
   stockAnalysisDir: string,
-  storedModelGroups: StockAnalysisModelGroupPerformance[],
+  _storedModelGroups: StockAnalysisModelGroupPerformance[],
   expertPerformance?: StockAnalysisExpertPerformanceData | null,
 ): Promise<StockAnalysisModelGroupPerformance[]> {
   // expert-performance 被重置后，旧 model-groups 缓存不再可信，必须等待新样本重新生成。
   if (!hasModelGroupPerformanceSamples(expertPerformance)) {
     return []
   }
-  return storedModelGroups.length > 0 ? storedModelGroups : buildModelGroupPerformance(stockAnalysisDir, expertPerformance)
+  // model-groups 是派生统计，不能信任持久化缓存；否则模型切换/历史回填后会继续展示旧胜率。
+  return buildModelGroupPerformance(stockAnalysisDir, expertPerformance)
 }
 
 // ==================== S2+S3: 自动周报/月报生成 ====================
@@ -3809,14 +3835,17 @@ async function buildModelGroupPerformance(stockAnalysisDir: string, expertPerfor
     return { providerId: '', providerName: '' }
   }
 
-  // 构建分组键：providerId/modelId 或仅 modelId（旧数据无 provider 时）
-  function getGroupKey(vote: StockAnalysisExpertVote): { groupKey: string; modelId: string; providerId: string; providerName: string; displayName: string } {
-    if (vote.modelId === 'rule-engine') {
+  function buildModelGroupKey(input: {
+    modelId?: string
+    providerId?: string
+    providerName?: string
+  }): { groupKey: string; modelId: string; providerId: string; providerName: string; displayName: string } {
+    if (input.modelId === 'rule-engine') {
       return { groupKey: 'rules', modelId: 'rule-engine', providerId: '', providerName: '', displayName: '规则引擎' }
     }
-    const modelId = normalizeModelId(vote.modelId || 'unknown')
-    let providerId = vote.providerId || ''
-    let providerName = vote.providerName || ''
+    const modelId = normalizeModelId(input.modelId || 'unknown')
+    let providerId = input.providerId || ''
+    let providerName = input.providerName || ''
 
     // 旧数据没有 provider 时，从配置中推断
     if (!providerId && !providerName) {
@@ -3828,6 +3857,11 @@ async function buildModelGroupPerformance(stockAnalysisDir: string, expertPerfor
     const groupKey = providerId ? `${providerId}/${modelId}` : modelId
     const displayName = providerName ? `${modelId} (${providerName})` : modelId
     return { groupKey, modelId, providerId, providerName, displayName }
+  }
+
+  // 构建分组键：providerId/modelId 或仅 modelId（旧数据无 provider 时）
+  function getGroupKey(vote: StockAnalysisExpertVote): { groupKey: string; modelId: string; providerId: string; providerName: string; displayName: string } {
+    return buildModelGroupKey(vote)
   }
 
   // 按 provider/model 分组统计
@@ -3862,7 +3896,9 @@ async function buildModelGroupPerformance(stockAnalysisDir: string, expertPerfor
     groupMap.set(groupKey, existing)
   }
 
-  // 从 expert performance 按 provider/model 聚合真实 winRate、calibration、weight
+  // 从 expert performance 按 provider/model 聚合真实 winRate、calibration、weight。
+  // 新口径优先使用每条 recentOutcome 上记录的实际 provider/model，确保模型切换、fallback、规则专家都能归到真实投票模型。
+  // 旧 outcome 没有模型字段时，再退回 expertId -> 历史 vote groupKeys 映射。
   // 建 expertId → groupKeys 映射（一个 expert 可能被多个模型使用，需要将胜率分配给所有相关模型组）
   const expertGroupsMap = new Map<string, Set<string>>()
   for (const vote of allVotes) {
@@ -3875,17 +3911,55 @@ async function buildModelGroupPerformance(stockAnalysisDir: string, expertPerfor
     }
   }
 
-  const modelGroupWinRates = new Map<string, { totalCorrect: number; totalPredictions: number; totalCalibration: number; totalWeight: number; expertCount: number }>()
+  const modelGroupWinRates = new Map<string, { totalCorrect: number; totalPredictions: number; totalConfidence: number; totalWeight: number; weightSamples: number; expertIds: Set<string> }>()
+  const expertWeightMap = new Map((expertPerformance?.entries ?? []).map((entry) => [entry.expertId, entry.weight]))
+  let settledDailyMemoryCount = 0
+
+  for (const date of dates) {
+    const dailyMemories = await readExpertDailyMemories(stockAnalysisDir, date)
+    for (const memoryEntry of dailyMemories) {
+      if (!memoryEntry.modelId || memoryEntry.actualReturnNextDay === null || memoryEntry.wasCorrect === null) continue
+      const { groupKey } = buildModelGroupKey(memoryEntry)
+      const existing = modelGroupWinRates.get(groupKey) ?? { totalCorrect: 0, totalPredictions: 0, totalConfidence: 0, totalWeight: 0, weightSamples: 0, expertIds: new Set<string>() }
+      existing.totalCorrect += memoryEntry.wasCorrect ? 1 : 0
+      existing.totalPredictions += 1
+      existing.totalConfidence += memoryEntry.confidence
+      existing.totalWeight += expertWeightMap.get(memoryEntry.expertId) ?? 1
+      existing.weightSamples += 1
+      existing.expertIds.add(memoryEntry.expertId)
+      modelGroupWinRates.set(groupKey, existing)
+      settledDailyMemoryCount += 1
+    }
+  }
+
   if (expertPerformance && expertPerformance.entries.length > 0) {
     for (const entry of expertPerformance.entries) {
+      if (settledDailyMemoryCount > 0) continue
+      const outcomesWithModel = entry.recentOutcomes.filter((outcome) => outcome.modelId)
+      if (outcomesWithModel.length > 0) {
+        for (const outcome of outcomesWithModel) {
+          const { groupKey } = buildModelGroupKey(outcome)
+          const existing = modelGroupWinRates.get(groupKey) ?? { totalCorrect: 0, totalPredictions: 0, totalConfidence: 0, totalWeight: 0, weightSamples: 0, expertIds: new Set<string>() }
+          existing.totalCorrect += outcome.correct ? 1 : 0
+          existing.totalPredictions += 1
+          existing.totalConfidence += outcome.confidence
+          existing.totalWeight += entry.weight
+          existing.weightSamples += 1
+          existing.expertIds.add(entry.expertId)
+          modelGroupWinRates.set(groupKey, existing)
+        }
+        continue
+      }
+
       const groupKeys = expertGroupsMap.get(entry.expertId) ?? new Set(entry.layer === 'rule_functions' ? ['rules'] : ['unknown'])
       for (const groupKey of groupKeys) {
-        const existing = modelGroupWinRates.get(groupKey) ?? { totalCorrect: 0, totalPredictions: 0, totalCalibration: 0, totalWeight: 0, expertCount: 0 }
+        const existing = modelGroupWinRates.get(groupKey) ?? { totalCorrect: 0, totalPredictions: 0, totalConfidence: 0, totalWeight: 0, weightSamples: 0, expertIds: new Set<string>() }
         existing.totalCorrect += entry.correctCount
         existing.totalPredictions += entry.predictionCount
-        existing.totalCalibration += entry.calibration
+        existing.totalConfidence += entry.averageConfidence * entry.predictionCount
         existing.totalWeight += entry.weight
-        existing.expertCount += 1
+        existing.weightSamples += 1
+        existing.expertIds.add(entry.expertId)
         modelGroupWinRates.set(groupKey, existing)
       }
     }
@@ -3896,11 +3970,14 @@ async function buildModelGroupPerformance(stockAnalysisDir: string, expertPerfor
     const winRate = perfStats && perfStats.totalPredictions > 0
       ? round(perfStats.totalCorrect / perfStats.totalPredictions, 4)
       : 0
-    const calibration = perfStats && perfStats.expertCount > 0
-      ? round(perfStats.totalCalibration / perfStats.expertCount, 4)
+    const averageConfidenceForCalibration = perfStats && perfStats.totalPredictions > 0
+      ? perfStats.totalConfidence / perfStats.totalPredictions / 100
+      : null
+    const calibration = averageConfidenceForCalibration !== null
+      ? round(Math.abs(averageConfidenceForCalibration - winRate), 4)
       : 0
-    const weight = perfStats && perfStats.expertCount > 0
-      ? round(perfStats.totalWeight / perfStats.expertCount, 2)
+    const weight = perfStats && perfStats.weightSamples > 0
+      ? round(perfStats.totalWeight / perfStats.weightSamples, 2)
       : 1
 
     return {
@@ -4864,6 +4941,22 @@ export async function pollIntradayOnce(stockAnalysisDir: string): Promise<Intrad
         }
       }
 
+      if (canAutoCloseIntraday && pnlPercent >= config.intradayAutoCloseProfitPercent) {
+        try {
+          await closeStockAnalysisPosition(stockAnalysisDir, position.id, {
+            closeAll: true,
+            price: currentPrice,
+            note: `系统盘中自动止盈平仓：${position.name}(${position.code}) 盈利 ${pnlPercent.toFixed(2)}% 超过 ${config.intradayAutoCloseProfitPercent}% 阈值`,
+            clientNonce: `intraday-auto-take-profit-${position.id}-${monitorStatus.pollCount + 1}`,
+          })
+          autoClosedPositionIds.add(position.id)
+          saLog.warn('Service', `[盘中] 自动止盈触发: ${position.code} current=${currentPrice} pnl=${pnlPercent.toFixed(2)}% threshold=${config.intradayAutoCloseProfitPercent}%`)
+        } catch (error) {
+          logger.error(`[stock-analysis] [盘中] 自动止盈失败 ${position.code}: ${(error as Error).message}`, { module: 'StockAnalysis' })
+          saLog.error('Service', `[盘中] 自动止盈失败 ${position.code}: ${(error as Error).message}`)
+        }
+      }
+
       // 止盈 1 检查
       if (pnlPercent >= config.takeProfitPercent1) {
         pushAlertIfNew('take_profit_1', buyPrice * (1 + config.takeProfitPercent1 / 100),
@@ -5446,11 +5539,11 @@ export async function confirmStockAnalysisSignal(
     if (latestMarketState) {
       const marketRisk = evaluateMarketLevelRisk(latestMarketState, config)
       if (marketRisk.extremeBearActive) {
-        throw new Error('市场级风控：极端熊市状态，暂停所有新开仓')
+        throw new Error('市场级风控：极端熊市状态，已限制新开仓')
       }
       if (marketRisk.liquidityCrisisActive) {
         saLog.audit('Service', `confirmSignal 市场级流动性危机拦截 ${signal.code}: ${describeMarketLiquidityState(latestMarketState, config)}`)
-        throw new Error('市场级风控：流动性危机状态，暂停所有新开仓')
+        throw new Error('市场级风控：流动性危机状态，已限制新开仓')
       }
       if (marketRisk.lowLiquidityActive) {
         saLog.info('Service', `confirmSignal 低流动性护栏生效 ${signal.code}: ${describeMarketLiquidityState(latestMarketState, config)} maxPositionRatio=${marketRisk.effectiveMaxPositionRatio}`)
@@ -5493,13 +5586,13 @@ export async function confirmStockAnalysisSignal(
         id: `risk-veto_paused-${Date.now()}`,
         timestamp: nowIso(),
         eventType: 'veto_paused',
-        reason: `系统风控已暂停交易，否决买入 ${signal.name}(${signal.code})：${runtimeStatus.riskControl.pauseReason ?? '未知原因'}`,
+        reason: `系统风控已限制新开仓，否决买入 ${signal.name}(${signal.code})：${runtimeStatus.riskControl.pauseReason ?? '未知原因'}`,
         metrics: {},
         relatedCode: signal.code,
       }
       const existingEvents = await readStockAnalysisRiskEvents(stockAnalysisDir)
       await saveStockAnalysisRiskEvents(stockAnalysisDir, [vetoEvent, ...existingEvents])
-      throw new Error(`系统风控已暂停交易：${runtimeStatus.riskControl.pauseReason ?? '未知原因'}`)
+      throw new Error(`系统风控已限制新开仓：${runtimeStatus.riskControl.pauseReason ?? '未知原因'}`)
     }
 
     // Fix 3: 买入价格优先使用实时行情（与卖出对齐）
@@ -5838,20 +5931,7 @@ export async function closeStockAnalysisPosition(stockAnalysisDir: string, posit
       readStockAnalysisReviews(stockAnalysisDir),
     ])
 
-    // v1.35.0 [A4-P0-1] 风控暂停校验：paused=true 时禁止平仓，保护资金
-    if (runtimeStatus.riskControl?.paused) {
-      const vetoEvent: StockAnalysisRiskEvent = {
-        id: `risk-veto_paused-close-${Date.now()}`,
-        timestamp: nowIso(),
-        eventType: 'veto_paused',
-        reason: `系统风控已暂停交易，禁止平仓 ${position.name}(${position.code})：${runtimeStatus.riskControl.pauseReason ?? '未知原因'}`,
-        metrics: {},
-        relatedCode: position.code,
-      }
-      const existingEvents = await readStockAnalysisRiskEvents(stockAnalysisDir)
-      await saveStockAnalysisRiskEvents(stockAnalysisDir, [vetoEvent, ...existingEvents])
-      throw new Error(`系统风控已暂停交易：${runtimeStatus.riskControl.pauseReason ?? '未知原因'}`)
-    }
+    // 风控暂停只禁止新增风险，不应阻止用户平仓退出风险。
 
     // BUG-1 fix: 当前端未传 price 时，主动获取实时行情作为卖出价
     let price = request.price
@@ -5975,20 +6055,7 @@ export async function reduceStockAnalysisPosition(stockAnalysisDir: string, posi
       readStockAnalysisRuntimeStatus(stockAnalysisDir),
     ])
 
-    // v1.35.0 [A4-P0-1] 风控暂停校验：paused=true 时禁止减仓
-    if (runtimeStatus.riskControl?.paused) {
-      const vetoEvent: StockAnalysisRiskEvent = {
-        id: `risk-veto_paused-reduce-${Date.now()}`,
-        timestamp: nowIso(),
-        eventType: 'veto_paused',
-        reason: `系统风控已暂停交易，禁止减仓 ${position.name}(${position.code})：${runtimeStatus.riskControl.pauseReason ?? '未知原因'}`,
-        metrics: {},
-        relatedCode: position.code,
-      }
-      const existingEvents = await readStockAnalysisRiskEvents(stockAnalysisDir)
-      await saveStockAnalysisRiskEvents(stockAnalysisDir, [vetoEvent, ...existingEvents])
-      throw new Error(`系统风控已暂停交易：${runtimeStatus.riskControl.pauseReason ?? '未知原因'}`)
-    }
+    // 风控暂停只禁止新增风险，不应阻止用户减仓退出部分风险。
 
     // 获取实时价格
     let price = request.price
@@ -6087,7 +6154,7 @@ export async function dismissPositionAction(stockAnalysisDir: string, positionId
     // v1.35.0 [A4-P0-1] 风控暂停时，直接拒绝 dismiss（清空告警无商业意义）
     const runtimeStatus = await readStockAnalysisRuntimeStatus(stockAnalysisDir)
     if (runtimeStatus.riskControl?.paused) {
-      throw new Error(`系统风控已暂停交易，请先解除风控暂停再处理此告警：${runtimeStatus.riskControl.pauseReason ?? '未知原因'}`)
+      throw new Error(`系统风控已限制新开仓，请先解除该限制再处理此告警：${runtimeStatus.riskControl.pauseReason ?? '未知原因'}`)
     }
 
     const previousAction = position.action
@@ -6121,7 +6188,7 @@ export async function getStockAnalysisConfig(stockAnalysisDir: string) {
   return readStockAnalysisConfig(stockAnalysisDir)
 }
 
-export async function updateStockAnalysisConfig(stockAnalysisDir: string, patch: Partial<StockAnalysisStrategyConfig>) {
+export async function updateStockAnalysisConfig(stockAnalysisDir: string, patch: StockAnalysisConfigPatch) {
   const current = await readStockAnalysisConfig(stockAnalysisDir)
   const next: StockAnalysisStrategyConfig = {
     ...current,
@@ -6137,8 +6204,28 @@ export async function updateStockAnalysisConfig(stockAnalysisDir: string, patch:
     throw new Error('盘中自动平仓亏损阈值必须在 0-100 之间')
   }
 
+  if (!Number.isFinite(next.intradayAutoCloseProfitPercent) || next.intradayAutoCloseProfitPercent <= 0 || next.intradayAutoCloseProfitPercent > 100) {
+    throw new Error('盘中自动止盈阈值必须在 0-100 之间')
+  }
+
+  if (!Number.isFinite(next.portfolioRiskLimits.maxDailyLossPercent) || next.portfolioRiskLimits.maxDailyLossPercent <= 0 || next.portfolioRiskLimits.maxDailyLossPercent > 100) {
+    throw new Error('日度亏损暂停阈值必须在 0-100 之间')
+  }
+
+  if (!Number.isFinite(next.portfolioRiskLimits.maxWeeklyLossPercent) || next.portfolioRiskLimits.maxWeeklyLossPercent <= 0 || next.portfolioRiskLimits.maxWeeklyLossPercent > 100) {
+    throw new Error('周度亏损暂停阈值必须在 0-100 之间')
+  }
+
+  if (!Number.isFinite(next.portfolioRiskLimits.maxMonthlyLossPercent) || next.portfolioRiskLimits.maxMonthlyLossPercent <= 0 || next.portfolioRiskLimits.maxMonthlyLossPercent > 100) {
+    throw new Error('月度亏损暂停阈值必须在 0-100 之间')
+  }
+
   await saveStockAnalysisConfig(stockAnalysisDir, next)
-  saLog.audit('Service', `stock analysis config updated: intradayAutoCloseLossPercent=${next.intradayAutoCloseLossPercent}`)
+  const riskControl = await recomputeRiskControlState(stockAnalysisDir, next.portfolioRiskLimits)
+  saLog.audit(
+    'Service',
+    `stock analysis config updated: intradayAutoCloseLossPercent=${next.intradayAutoCloseLossPercent}, intradayAutoCloseProfitPercent=${next.intradayAutoCloseProfitPercent}, maxDailyLossPercent=${next.portfolioRiskLimits.maxDailyLossPercent}, maxWeeklyLossPercent=${next.portfolioRiskLimits.maxWeeklyLossPercent}, maxMonthlyLossPercent=${next.portfolioRiskLimits.maxMonthlyLossPercent}, paused=${riskControl.paused}`,
+  )
   return next
 }
 
@@ -6972,4 +7059,5 @@ export const _testing = {
   evaluateMarketLevelRisk,
   assertWithinPostMarketWindow,
   POST_MARKET_BATCH_WINDOW_MS,
+  buildModelGroupPerformance,
 }

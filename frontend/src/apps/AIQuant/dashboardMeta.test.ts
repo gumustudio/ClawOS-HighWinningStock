@@ -284,6 +284,7 @@ const baseConfig: StockAnalysisStrategyConfig = {
   maxTotalPosition: 0.85,
   stopLossPercent: 3,
   intradayAutoCloseLossPercent: 5,
+  intradayAutoCloseProfitPercent: 10,
   takeProfitPercent1: 3,
   takeProfitPercent2: 6,
   maxHoldDays: 20,

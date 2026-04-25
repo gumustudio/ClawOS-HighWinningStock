@@ -82,6 +82,7 @@ export const DEFAULT_STOCK_ANALYSIS_CONFIG: StockAnalysisStrategyConfig = {
   maxTotalPosition: 1.0,
   stopLossPercent: 3,
   intradayAutoCloseLossPercent: 5,
+  intradayAutoCloseProfitPercent: 10,
   takeProfitPercent1: 3,
   takeProfitPercent2: 6,
   maxHoldDays: 20,
@@ -114,9 +115,9 @@ export const DEFAULT_STOCK_ANALYSIS_CONFIG: StockAnalysisStrategyConfig = {
     pullbackPercent: 2,
   },
   portfolioRiskLimits: {
-    maxDailyLossPercent: 3,
-    maxWeeklyLossPercent: 6,
-    maxMonthlyLossPercent: 10,
+    maxDailyLossPercent: 10,
+    maxWeeklyLossPercent: 20,
+    maxMonthlyLossPercent: 30,
     maxDrawdownPercent: 15,
   },
 }

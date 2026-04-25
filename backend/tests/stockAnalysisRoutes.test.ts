@@ -6,6 +6,8 @@ import path from 'node:path'
 import express from 'express'
 import request from 'supertest'
 
+import { DEFAULT_RISK_CONTROL_STATE } from '../src/services/stock-analysis/store'
+
 test('stock analysis routes expose config path and runtime overview using persisted files', async () => {
   const originalHome = process.env.HOME
   const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), 'clawos-stock-analysis-test-'))
@@ -37,6 +39,7 @@ test('stock analysis routes expose config path and runtime overview using persis
         maxTotalPosition: 0.85,
         stopLossPercent: 3,
         intradayAutoCloseLossPercent: 5,
+        intradayAutoCloseProfitPercent: 10,
         takeProfitPercent1: 3,
         takeProfitPercent2: 6,
         maxHoldDays: 20,
@@ -57,6 +60,12 @@ test('stock analysis routes expose config path and runtime overview using persis
           low_volatility_range: { expert: 0.35, technical: 0.30, quant: 0.35 },
           normal_range: { expert: 0.35, technical: 0.35, quant: 0.30 },
         },
+        portfolioRiskLimits: {
+          maxDailyLossPercent: 10,
+          maxWeeklyLossPercent: 20,
+          maxMonthlyLossPercent: 10,
+          maxDrawdownPercent: 15,
+        },
       }, null, 2),
       'utf8',
     )
@@ -75,6 +84,15 @@ test('stock analysis routes expose config path and runtime overview using persis
         latestSuccessfulSignalDate: '2026-04-01',
         isUsingFallback: false,
         staleReasons: [],
+        riskControl: {
+          ...DEFAULT_RISK_CONTROL_STATE,
+          paused: true,
+          pauseReason: '月度亏损 10.3% 已超过阈值 10%',
+          pausedAt: '2026-04-01T08:05:00.000Z',
+          monthlyLossPercent: -10.3,
+          monthlyLossBreached: true,
+          lastCheckedAt: '2026-04-01T08:05:00.000Z',
+        },
       }, null, 2),
       'utf8',
     )
@@ -207,7 +225,24 @@ test('stock analysis routes expose config path and runtime overview using persis
       'utf8',
     )
     await fs.writeFile(path.join(stockAnalysisDir, 'portfolio', 'positions.json'), '[]\n', 'utf8')
-    await fs.writeFile(path.join(stockAnalysisDir, 'journal', 'trades.json'), '[]\n', 'utf8')
+    await fs.writeFile(path.join(stockAnalysisDir, 'journal', 'trades.json'), JSON.stringify([
+      {
+        id: 'trade-sell-1',
+        action: 'sell',
+        code: '600519',
+        name: '贵州茅台',
+        tradeDate: '2026-04-01T08:05:00.000Z',
+        price: 1400,
+        quantity: 100,
+        weight: 0.3,
+        sourceSignalId: 'signal-600519-2026-04-01',
+        sourceDecision: 'user_confirmed',
+        note: '测试月度亏损',
+        relatedPositionId: 'position-1',
+        pnlPercent: -10.3,
+      },
+    ], null, 2) + '\n', 'utf8')
+    await fs.writeFile(path.join(stockAnalysisDir, 'journal', 'risk-events.json'), '[]\n', 'utf8')
     await fs.writeFile(path.join(stockAnalysisDir, 'journal', 'watch-logs.json'), '[]\n', 'utf8')
     await fs.writeFile(path.join(stockAnalysisDir, 'reports', 'weekly-summary.json'), '[]\n', 'utf8')
     await fs.writeFile(path.join(stockAnalysisDir, 'experts', 'model-groups.json'), '[]\n', 'utf8')
@@ -242,13 +277,33 @@ test('stock analysis routes expose config path and runtime overview using persis
 
     const updateConfigResponse = await request(app)
       .put('/api/system/stock-analysis/config')
-      .send({ intradayAutoCloseLossPercent: 6.5 })
+      .send({
+        intradayAutoCloseLossPercent: 6.5,
+        intradayAutoCloseProfitPercent: 11.5,
+        portfolioRiskLimits: {
+          maxDailyLossPercent: 10,
+          maxWeeklyLossPercent: 20,
+          maxMonthlyLossPercent: 30,
+        },
+      })
     assert.equal(updateConfigResponse.status, 200)
     assert.equal(updateConfigResponse.body.success, true)
     assert.equal(updateConfigResponse.body.data.intradayAutoCloseLossPercent, 6.5)
+    assert.equal(updateConfigResponse.body.data.intradayAutoCloseProfitPercent, 11.5)
+    assert.equal(updateConfigResponse.body.data.portfolioRiskLimits.maxDailyLossPercent, 10)
+    assert.equal(updateConfigResponse.body.data.portfolioRiskLimits.maxWeeklyLossPercent, 20)
+    assert.equal(updateConfigResponse.body.data.portfolioRiskLimits.maxMonthlyLossPercent, 30)
 
     const persistedConfig = JSON.parse(await fs.readFile(path.join(stockAnalysisDir, 'config', 'strategy.json'), 'utf8'))
     assert.equal(persistedConfig.intradayAutoCloseLossPercent, 6.5)
+    assert.equal(persistedConfig.intradayAutoCloseProfitPercent, 11.5)
+    assert.equal(persistedConfig.portfolioRiskLimits.maxDailyLossPercent, 10)
+    assert.equal(persistedConfig.portfolioRiskLimits.maxWeeklyLossPercent, 20)
+    assert.equal(persistedConfig.portfolioRiskLimits.maxMonthlyLossPercent, 30)
+
+    const persistedRuntime = JSON.parse(await fs.readFile(path.join(stockAnalysisDir, 'config', 'runtime-status.json'), 'utf8'))
+    assert.equal(persistedRuntime.riskControl.paused, false)
+    assert.equal(persistedRuntime.riskControl.pauseReason, null)
   } finally {
     process.env.HOME = originalHome
     await fs.rm(tempHome, { recursive: true, force: true })

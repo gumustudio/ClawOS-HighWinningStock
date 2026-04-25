@@ -65,7 +65,7 @@ function createMockConfig(): StockAnalysisStrategyConfig {
       crisisMaxPositionRatio: 0.35,
     },
     trailingStop: { activationPercent: 3, pullbackPercent: 2 },
-    portfolioRiskLimits: { maxDailyLossPercent: 3, maxWeeklyLossPercent: 5, maxMonthlyLossPercent: 10, maxDrawdownPercent: 15 },
+    portfolioRiskLimits: { maxDailyLossPercent: 10, maxWeeklyLossPercent: 20, maxMonthlyLossPercent: 30, maxDrawdownPercent: 15 },
   }
 }
 

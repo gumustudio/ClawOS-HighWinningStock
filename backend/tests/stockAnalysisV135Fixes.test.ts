@@ -4,7 +4,7 @@
  * 覆盖：
  *   - A3-P0-2: confirmStockAnalysisSignal NaN/Infinity/负值/0/超界 weight 强校验
  *   - A3-P0-1: saveStockAnalysisSignals 保留 user_confirmed/user_rejected/user_ignored/user_override 状态
- *   - A4-P0-1: close/reduce/dismiss 在 riskControl.paused=true 时拒绝
+ *   - A4-P0-1: paused=true 时仍允许 close/reduce 退出风险，但 dismiss 继续拒绝
  *   - A4-P0-2: reduce/close 幂等性（lastTradeAt 窗口 + clientNonce 60s 去重）
  *   - A2-P0-1: getStockAnalysisOverview 并发卖出不产生幽灵持仓
  */
@@ -269,35 +269,34 @@ test('[A3-P0-2] confirmStockAnalysisSignal 拒绝超过 1 的 weight', async () 
 })
 
 // ───────────────────────────────────────────────────────
-// A4-P0-1 风控暂停禁止卖出/dismiss
+// A4-P0-1 风控暂停允许退出风险，但 dismiss 继续禁止
 // ───────────────────────────────────────────────────────
 
-test('[A4-P0-1] 风控暂停时，close 被拒绝', async () => {
+test('[A4-P0-1] 风控暂停时，close 仍允许执行', async () => {
   const dir = await createTempDir()
   await setupRuntimeStatus(dir, true)
   const position = buildPosition()
   await saveStockAnalysisPositions(dir, [position])
   await saveStockAnalysisTrades(dir, [])
 
-  await assert.rejects(
-    () => closeStockAnalysisPosition(dir, position.id, { closeAll: true, price: 2050 }),
-    /风控|paused|暂停/i,
-    'paused=true 时平仓必须拒绝',
-  )
+  const trade = await closeStockAnalysisPosition(dir, position.id, { closeAll: true, price: 2050 })
+  const after = await readStockAnalysisPositions(dir)
+  assert.equal(trade.action, 'sell')
+  assert.equal(after.length, 0, 'paused=true 时仍应允许平仓退出风险')
 })
 
-test('[A4-P0-1] 风控暂停时，reduce 被拒绝', async () => {
+test('[A4-P0-1] 风控暂停时，reduce 仍允许执行', async () => {
   const dir = await createTempDir()
   await setupRuntimeStatus(dir, true)
   const position = buildPosition()
   await saveStockAnalysisPositions(dir, [position])
   await saveStockAnalysisTrades(dir, [])
 
-  await assert.rejects(
-    () => reduceStockAnalysisPosition(dir, position.id, { weightDelta: 0.05, price: 2050 }),
-    /风控|paused|暂停/i,
-    'paused=true 时减仓必须拒绝',
-  )
+  const trade = await reduceStockAnalysisPosition(dir, position.id, { weightDelta: 0.05, price: 2050 })
+  const after = await readStockAnalysisPositions(dir)
+  assert.equal(trade.action, 'sell')
+  assert.equal(after.length, 1, 'paused=true 时减仓后仍应保留剩余持仓')
+  assert.ok(after[0].weight < position.weight, 'paused=true 时仍应允许减仓降低风险')
 })
 
 test('[A4-P0-1] 风控暂停时，dismissPositionAction 被拒绝', async () => {
@@ -414,6 +413,7 @@ test('[intraday-auto-close] 交易时段内亏损超过 5% 自动平仓', async 
       maxTotalPosition: 1,
       stopLossPercent: 3,
       intradayAutoCloseLossPercent: 5,
+      intradayAutoCloseProfitPercent: 10,
       takeProfitPercent1: 10,
       takeProfitPercent2: 20,
       blacklist: [],
@@ -477,6 +477,7 @@ test('[intraday-auto-close] 非交易时段亏损超过 5% 不自动平仓', asy
       maxTotalPosition: 1,
       stopLossPercent: 3,
       intradayAutoCloseLossPercent: 5,
+      intradayAutoCloseProfitPercent: 10,
       takeProfitPercent1: 10,
       takeProfitPercent2: 20,
       blacklist: [],
@@ -539,6 +540,7 @@ test('[intraday-auto-close] 使用配置项阈值，不再写死 5%', async () =
       maxTotalPosition: 1,
       stopLossPercent: 3,
       intradayAutoCloseLossPercent: 7,
+      intradayAutoCloseProfitPercent: 10,
       takeProfitPercent1: 10,
       takeProfitPercent2: 20,
       blacklist: [],
@@ -585,6 +587,133 @@ test('[intraday-auto-close] 使用配置项阈值，不再写死 5%', async () =
     const tradesAfter = await readStockAnalysisTrades(dir)
     assert.equal(positionsAfter.length, 1, '阈值调到 7% 后，-5.1% 不应自动平仓')
     assert.equal(tradesAfter.length, 0, '未达到配置阈值时不应写入卖出记录')
+  } finally {
+    restoreDate()
+  }
+})
+
+test('[intraday-auto-close] 交易时段内盈利超过 10% 自动止盈平仓', async () => {
+  const dir = await createTempDir()
+  const restoreDate = mockNow('2026-04-22T10:20:00.000+08:00')
+  try {
+    await setupRuntimeStatus(dir, false)
+    await saveStockAnalysisConfig(dir, {
+      maxPositions: 10,
+      maxSinglePosition: 0.3,
+      maxTotalPosition: 1,
+      stopLossPercent: 3,
+      intradayAutoCloseLossPercent: 5,
+      intradayAutoCloseProfitPercent: 10,
+      takeProfitPercent1: 10,
+      takeProfitPercent2: 20,
+      blacklist: [],
+      maxHoldDays: 20,
+      portfolioRiskLimits: { maxDailyLossPercent: 10, maxWeeklyLossPercent: 20, maxMonthlyLossPercent: 30, maxDrawdownPercent: 15 },
+    } as any)
+    const position = buildPosition({
+      id: 'position-auto-take-profit-1',
+      code: '600519',
+      openDate: '2026-04-21',
+      openedAt: '2026-04-21T01:30:00.000Z',
+      costPrice: 100,
+      currentPrice: 100,
+    })
+    await saveStockAnalysisPositions(dir, [position])
+    await saveStockAnalysisTrades(dir, [])
+    await saveStockAnalysisQuoteCache(dir, {
+      fetchedAt: new Date().toISOString(),
+      quotes: [{
+        code: '600519',
+        name: '贵州茅台',
+        latestPrice: 110.5,
+        changePercent: 10.5,
+        turnoverRate: 1,
+        open: 100,
+        high: 110.8,
+        low: 99.8,
+        previousClose: 100,
+        totalMarketCap: 1,
+        circulatingMarketCap: 1,
+      }],
+    } as any)
+    await saveIntradayMonitorStatus(dir, {
+      state: 'running',
+      lastPollAt: null,
+      pollCount: 0,
+      alerts: [],
+      startedAt: new Date().toISOString(),
+    })
+
+    await pollIntradayOnce(dir)
+
+    const positionsAfter = await readStockAnalysisPositions(dir)
+    const tradesAfter = await readStockAnalysisTrades(dir)
+    assert.equal(positionsAfter.length, 0, '交易时段内盈利达到 10% 应自动止盈平仓')
+    assert.equal(tradesAfter.length, 1, '自动止盈应写入 sell 交易记录')
+    assert.match(tradesAfter[0].note ?? '', /自动止盈平仓|超过 10% 阈值/)
+  } finally {
+    restoreDate()
+  }
+})
+
+test('[intraday-auto-close] 使用配置项止盈阈值，不再写死 10%', async () => {
+  const dir = await createTempDir()
+  const restoreDate = mockNow('2026-04-22T10:25:00.000+08:00')
+  try {
+    await setupRuntimeStatus(dir, false)
+    await saveStockAnalysisConfig(dir, {
+      maxPositions: 10,
+      maxSinglePosition: 0.3,
+      maxTotalPosition: 1,
+      stopLossPercent: 3,
+      intradayAutoCloseLossPercent: 5,
+      intradayAutoCloseProfitPercent: 12,
+      takeProfitPercent1: 10,
+      takeProfitPercent2: 20,
+      blacklist: [],
+      maxHoldDays: 20,
+      portfolioRiskLimits: { maxDailyLossPercent: 10, maxWeeklyLossPercent: 20, maxMonthlyLossPercent: 30, maxDrawdownPercent: 15 },
+    } as any)
+    const position = buildPosition({
+      id: 'position-auto-take-profit-2',
+      code: '600519',
+      openDate: '2026-04-21',
+      openedAt: '2026-04-21T01:30:00.000Z',
+      costPrice: 100,
+      currentPrice: 100,
+    })
+    await saveStockAnalysisPositions(dir, [position])
+    await saveStockAnalysisTrades(dir, [])
+    await saveStockAnalysisQuoteCache(dir, {
+      fetchedAt: new Date().toISOString(),
+      quotes: [{
+        code: '600519',
+        name: '贵州茅台',
+        latestPrice: 110.5,
+        changePercent: 10.5,
+        turnoverRate: 1,
+        open: 100,
+        high: 110.8,
+        low: 99.8,
+        previousClose: 100,
+        totalMarketCap: 1,
+        circulatingMarketCap: 1,
+      }],
+    } as any)
+    await saveIntradayMonitorStatus(dir, {
+      state: 'running',
+      lastPollAt: null,
+      pollCount: 0,
+      alerts: [],
+      startedAt: new Date().toISOString(),
+    })
+
+    await pollIntradayOnce(dir)
+
+    const positionsAfter = await readStockAnalysisPositions(dir)
+    const tradesAfter = await readStockAnalysisTrades(dir)
+    assert.equal(positionsAfter.length, 1, '止盈阈值调到 12% 后，10.5% 不应自动平仓')
+    assert.equal(tradesAfter.length, 0, '未达到配置止盈阈值时不应写入卖出记录')
   } finally {
     restoreDate()
   }

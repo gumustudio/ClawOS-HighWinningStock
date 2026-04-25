@@ -197,14 +197,44 @@ router.get('/config', async (_req, res) => {
 
 router.put('/config', async (req, res) => {
   try {
-    const rawValue = req.body?.intradayAutoCloseLossPercent
-    const nextValue = Number(rawValue)
-    if (!Number.isFinite(nextValue)) {
+    const rawIntradayValue = req.body?.intradayAutoCloseLossPercent
+    const rawIntradayProfitValue = req.body?.intradayAutoCloseProfitPercent
+    const rawDailyValue = req.body?.portfolioRiskLimits?.maxDailyLossPercent
+    const rawWeeklyValue = req.body?.portfolioRiskLimits?.maxWeeklyLossPercent
+    const rawMonthlyValue = req.body?.portfolioRiskLimits?.maxMonthlyLossPercent
+    const nextIntradayValue = Number(rawIntradayValue)
+    const nextIntradayProfitValue = Number(rawIntradayProfitValue)
+    const nextDailyValue = Number(rawDailyValue)
+    const nextWeeklyValue = Number(rawWeeklyValue)
+    const nextMonthlyValue = Number(rawMonthlyValue)
+    if (!Number.isFinite(nextIntradayValue)) {
       res.status(400).json({ success: false, error: '盘中自动平仓亏损阈值必须是数字' })
       return
     }
+    if (!Number.isFinite(nextIntradayProfitValue)) {
+      res.status(400).json({ success: false, error: '盘中自动止盈阈值必须是数字' })
+      return
+    }
+    if (!Number.isFinite(nextDailyValue)) {
+      res.status(400).json({ success: false, error: '日度亏损暂停阈值必须是数字' })
+      return
+    }
+    if (!Number.isFinite(nextWeeklyValue)) {
+      res.status(400).json({ success: false, error: '周度亏损暂停阈值必须是数字' })
+      return
+    }
+    if (!Number.isFinite(nextMonthlyValue)) {
+      res.status(400).json({ success: false, error: '月度亏损暂停阈值必须是数字' })
+      return
+    }
     const data = await updateStockAnalysisConfig(await getStockAnalysisDir(), {
-      intradayAutoCloseLossPercent: nextValue,
+      intradayAutoCloseLossPercent: nextIntradayValue,
+      intradayAutoCloseProfitPercent: nextIntradayProfitValue,
+      portfolioRiskLimits: {
+        maxDailyLossPercent: nextDailyValue,
+        maxWeeklyLossPercent: nextWeeklyValue,
+        maxMonthlyLossPercent: nextMonthlyValue,
+      },
     })
     res.json({ success: true, data })
   } catch (error) {

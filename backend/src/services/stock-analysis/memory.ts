@@ -14,6 +14,7 @@ import { callProviderText } from './llm-provider-adapter'
 import {
   readExpertDailyMemories,
   readExpertMemoryStore,
+  getAvailableSignalDates,
   readStockAnalysisQuoteCache,
   readStockAnalysisSignals,
   readStockAnalysisExpertPerformance,
@@ -38,6 +39,12 @@ import type {
   StockAnalysisExpertPerformanceEntry,
   StockAnalysisSignal,
 } from './types'
+
+function calculateEntryCorrectness(entry: ExpertDailyMemoryEntry, actualReturn: number): boolean {
+  return (entry.verdict === 'bullish' && actualReturn > 0)
+    || (entry.verdict === 'bearish' && actualReturn < 0)
+    || (entry.verdict === 'neutral' && Math.abs(actualReturn) < 0.5)
+}
 
 // ==================== FactPool 摘要 ====================
 
@@ -477,9 +484,6 @@ function extractMemoryEntriesFromSignals(
     if (!signal.expert?.votes) continue
 
     for (const vote of signal.expert.votes) {
-      // 跳过规则引擎和 fallback 的投票
-      if (vote.modelId === 'rule-engine' || vote.usedFallback) continue
-
       entries.push({
         tradeDate,
         expertId: vote.expertId,
@@ -490,6 +494,11 @@ function extractMemoryEntriesFromSignals(
         verdict: vote.verdict,
         confidence: vote.confidence,
         reason: vote.reason,
+        modelId: vote.modelId,
+        providerId: vote.providerId,
+        providerName: vote.providerName,
+        assignedModelId: vote.assignedModelId,
+        usedFallback: vote.usedFallback,
         actualReturnNextDay: null,
         wasCorrect: null,
       })
@@ -543,9 +552,7 @@ async function settleTradeDateResults(
 
     entry.actualReturnNextDay = actualReturn
     // P2-C4: neutral 正确性阈值收紧 — 从 1% 改为 0.5%（A 股日均波动 1.5-2%，1% 太宽松导致 neutral 胜率虚高）
-    entry.wasCorrect = (entry.verdict === 'bullish' && actualReturn > 0)
-      || (entry.verdict === 'bearish' && actualReturn < 0)
-      || (entry.verdict === 'neutral' && Math.abs(actualReturn) < 0.5)
+    entry.wasCorrect = calculateEntryCorrectness(entry, actualReturn)
     settled++
   }
 
@@ -573,6 +580,11 @@ async function syncExpertPerformanceFromDailyMemory(
     const outcome = {
       tradeDate,
       code: memoryEntry.code,
+      modelId: memoryEntry.modelId,
+      providerId: memoryEntry.providerId,
+      providerName: memoryEntry.providerName,
+      assignedModelId: memoryEntry.assignedModelId,
+      usedFallback: memoryEntry.usedFallback,
       verdict: memoryEntry.verdict,
       confidence: memoryEntry.confidence,
       actualReturnPercent: Number(predictionReturn.toFixed(4)),
@@ -625,6 +637,112 @@ async function syncExpertPerformanceFromDailyMemory(
     entries: updatedEntries,
   })
   logger.info(`[memory] 已将 ${settledEntries.length} 条当日结算结果同步到 expert-performance (${tradeDate})`, { module: 'StockAnalysis' })
+}
+
+function buildExpertPerformanceFromSettledEntries(entries: ExpertDailyMemoryEntry[]): StockAnalysisExpertPerformanceData {
+  const entryMap = new Map<string, StockAnalysisExpertPerformanceEntry>()
+  const dedupeKeys = new Set<string>()
+  const sortedEntries = [...entries]
+    .filter((entry) => entry.actualReturnNextDay !== null && entry.wasCorrect !== null)
+    .sort((left, right) => left.tradeDate.localeCompare(right.tradeDate))
+
+  for (const memoryEntry of sortedEntries) {
+    const dedupeKey = [
+      memoryEntry.tradeDate,
+      memoryEntry.code,
+      memoryEntry.expertId,
+      memoryEntry.verdict,
+      memoryEntry.modelId ?? '',
+      memoryEntry.providerId ?? '',
+    ].join(':')
+    if (dedupeKeys.has(dedupeKey)) continue
+    dedupeKeys.add(dedupeKey)
+
+    const predictionReturn = memoryEntry.actualReturnNextDay ?? 0
+    const correct = Boolean(memoryEntry.wasCorrect)
+    const performanceEntry = entryMap.get(memoryEntry.expertId)
+    const outcome = {
+      tradeDate: memoryEntry.tradeDate,
+      code: memoryEntry.code,
+      modelId: memoryEntry.modelId,
+      providerId: memoryEntry.providerId,
+      providerName: memoryEntry.providerName,
+      assignedModelId: memoryEntry.assignedModelId,
+      usedFallback: memoryEntry.usedFallback,
+      verdict: memoryEntry.verdict,
+      confidence: memoryEntry.confidence,
+      actualReturnPercent: Number(predictionReturn.toFixed(4)),
+      correct,
+      source: 'daily_close' as const,
+    }
+
+    if (performanceEntry) {
+      performanceEntry.predictionCount += 1
+      if (correct) performanceEntry.correctCount += 1
+      performanceEntry.averageConfidence = Number((((performanceEntry.averageConfidence * (performanceEntry.predictionCount - 1)) + memoryEntry.confidence) / performanceEntry.predictionCount).toFixed(4))
+      performanceEntry.recentOutcomes = [outcome, ...performanceEntry.recentOutcomes].slice(0, 50)
+      performanceEntry.lastPredictionDate = performanceEntry.lastPredictionDate.localeCompare(memoryEntry.tradeDate) >= 0
+        ? performanceEntry.lastPredictionDate
+        : memoryEntry.tradeDate
+    } else {
+      entryMap.set(memoryEntry.expertId, {
+        expertId: memoryEntry.expertId,
+        expertName: memoryEntry.expertName ?? memoryEntry.expertId,
+        layer: memoryEntry.layer ?? 'rule_functions',
+        predictionCount: 1,
+        correctCount: correct ? 1 : 0,
+        winRate: correct ? 1 : 0,
+        averageConfidence: memoryEntry.confidence,
+        calibration: Number(Math.abs(memoryEntry.confidence / 100 - (correct ? 1 : 0)).toFixed(4)),
+        weight: 1,
+        lastPredictionDate: memoryEntry.tradeDate,
+        recentOutcomes: [outcome],
+      })
+    }
+  }
+
+  const updatedEntries = Array.from(entryMap.values()).map((entry) => {
+    entry.winRate = Number((entry.correctCount / entry.predictionCount).toFixed(4))
+    entry.calibration = Number(Math.abs(entry.averageConfidence / 100 - entry.winRate).toFixed(4))
+    const latestDate = entry.recentOutcomes[0]?.tradeDate
+    const ageDays = latestDate ? Math.max(0, (Date.now() - new Date(latestDate).getTime()) / 86400000) : 0
+    const decayFactor = Math.pow(2, -ageDays / 60)
+    const baseWeight = entry.predictionCount < 5 ? 1 : 1.0 + (entry.winRate - 0.5) * 2.0
+    return {
+      ...entry,
+      weight: Number(Math.max(0.1, Math.min(2.0, baseWeight * (0.5 + 0.5 * decayFactor))).toFixed(4)),
+    }
+  })
+
+  return {
+    updatedAt: new Date().toISOString(),
+    entries: updatedEntries,
+  }
+}
+
+export async function rebuildExpertPerformanceFromSignals(stockAnalysisDir: string): Promise<StockAnalysisExpertPerformanceData> {
+  const dates = await getAvailableSignalDates(stockAnalysisDir)
+  const allSettledEntries: ExpertDailyMemoryEntry[] = []
+
+  for (const tradeDate of dates) {
+    const signals = await readStockAnalysisSignals(stockAnalysisDir, tradeDate)
+    if (signals.length === 0) continue
+
+    const entries = extractMemoryEntriesFromSignals(signals, tradeDate)
+    if (entries.length === 0) continue
+
+    const settledEntries = await settleTradeDateResults(stockAnalysisDir, entries, signals)
+    const completeEntries = settledEntries.filter((entry) => entry.actualReturnNextDay !== null && entry.wasCorrect !== null)
+    if (completeEntries.length === 0) continue
+
+    await saveExpertDailyMemories(stockAnalysisDir, tradeDate, settledEntries)
+    allSettledEntries.push(...completeEntries)
+  }
+
+  const rebuilt = buildExpertPerformanceFromSettledEntries(allSettledEntries)
+  await saveStockAnalysisExpertPerformance(stockAnalysisDir, rebuilt)
+  logger.info(`[memory] 已从 signals 重建 expert-performance：专家=${rebuilt.entries.length} 样本=${allSettledEntries.length}`, { module: 'StockAnalysis' })
+  return rebuilt
 }
 
 /** 更新 memory-store：整合短期记忆，必要时 LLM 压缩中期 */
@@ -1286,4 +1404,5 @@ export const _testing = {
   mergeLongTermMemory,
   buildLongTermStatistical,
   settleTradeDateResults,
+  buildExpertPerformanceFromSettledEntries,
 }

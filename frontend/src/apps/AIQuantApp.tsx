@@ -162,7 +162,7 @@ type TradeConfirmState =
 const DEFAULT_LIMITS: StockAnalysisPortfolioRiskLimits = {
   maxDailyLossPercent: 3,
   maxWeeklyLossPercent: 6,
-  maxMonthlyLossPercent: 10,
+  maxMonthlyLossPercent: 30,
   maxDrawdownPercent: 15,
 }
 

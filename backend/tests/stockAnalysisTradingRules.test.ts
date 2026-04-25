@@ -70,9 +70,9 @@ async function setupTradingFixture() {
       pullbackPercent: 2.5,
     },
     portfolioRiskLimits: {
-      maxDailyLossPercent: 3,
-      maxWeeklyLossPercent: 6,
-      maxMonthlyLossPercent: 10,
+      maxDailyLossPercent: 10,
+      maxWeeklyLossPercent: 20,
+      maxMonthlyLossPercent: 30,
       maxDrawdownPercent: 12,
     },
   }, null, 2), 'utf8')

@@ -501,6 +501,7 @@ export interface StockAnalysisStrategyConfig {
   maxTotalPosition: number
   stopLossPercent: number
   intradayAutoCloseLossPercent: number
+  intradayAutoCloseProfitPercent: number
   takeProfitPercent1: number
   takeProfitPercent2: number
   maxHoldDays: number
@@ -758,6 +759,16 @@ export interface StockAnalysisExpertPerformanceEntry {
 export interface StockAnalysisExpertOutcome {
   tradeDate: string
   code: string
+  /** 实际投票时使用的模型 ID。旧数据可能缺失。 */
+  modelId?: string
+  /** 实际投票时使用的供应商 ID。旧数据可能缺失。 */
+  providerId?: string
+  /** 实际投票时使用的供应商名称。旧数据可能缺失。 */
+  providerName?: string
+  /** 原始分配模型 ID。fallback 时与 modelId 可能不同。 */
+  assignedModelId?: string
+  /** 该票是否由 fallback 模型产生。 */
+  usedFallback?: boolean
   verdict: 'bullish' | 'bearish' | 'neutral'
   confidence: number
   /** 实际收益率（正=涨/负=跌） */
@@ -931,7 +942,7 @@ export interface SupportResistanceLevels {
 
 /** 市场级风控状态 */
 export interface MarketLevelRiskState {
-  /** 极端熊市：20日跌幅>10%，暂停所有新开仓 */
+  /** 极端熊市：20日跌幅>10%，限制新开仓 */
   extremeBearActive: boolean
   /** 极端波动：波动率>95th百分位，仓位上限降至50% */
   extremeVolatilityActive: boolean
@@ -1275,6 +1286,16 @@ export interface ExpertDailyMemoryEntry {
   verdict: 'bullish' | 'bearish' | 'neutral'
   confidence: number
   reason: string
+  /** 实际投票时使用的模型 ID。旧数据可能缺失。 */
+  modelId?: string
+  /** 实际投票时使用的供应商 ID。旧数据可能缺失。 */
+  providerId?: string
+  /** 实际投票时使用的供应商名称。旧数据可能缺失。 */
+  providerName?: string
+  /** 原始分配模型 ID。fallback 时与 modelId 可能不同。 */
+  assignedModelId?: string
+  /** 该票是否由 fallback 模型产生。 */
+  usedFallback?: boolean
   /** 历史字段名沿用：现语义为预测日当天收盘结算收益率（盘后回填） */
   actualReturnNextDay: number | null
   /** 历史字段名沿用：现语义为预测日当天收盘结算是否正确（盘后回填） */
