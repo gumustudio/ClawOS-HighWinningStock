@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { Minus, Square, X, Settings } from 'lucide-react'
-import { DashboardIcon, MonitorIcon, FilesIcon, VideoIcon, LocalMusicIcon, DownloadsIcon, NotesIcon, ReaderIcon, CronIcon, BaiduIcon, QuarkIcon, NeteaseIcon, OpenClawIcon, DidaIcon } from './components/Icons'
+import { DashboardIcon, MonitorIcon, FilesIcon, VideoIcon, LocalMusicIcon, DownloadsIcon, NotesIcon, ReaderIcon, CronIcon, QuarkIcon, NeteaseIcon, OpenClawIcon, DidaIcon } from './components/Icons'
 import NeteaseLogin from './components/NeteaseLogin'
 import DidaLogin from './components/DidaLogin'
 import LoginScreen from './components/LoginScreen'
@@ -31,7 +31,7 @@ import { useNotificationStore } from './store/useNotificationStore'
 
 
 
-type AppId = 'aiquant' | 'dashboard' | 'monitor' | 'openclaw' | 'files' | 'video' | 'music' | 'localmusic' | 'downloads' | 'notes' | 'baidu' | 'quark' | 'reader' | 'cron' | 'dida'
+type AppId = 'aiquant' | 'dashboard' | 'monitor' | 'openclaw' | 'files' | 'video' | 'music' | 'localmusic' | 'downloads' | 'notes' | 'quark' | 'reader' | 'cron' | 'dida'
 
 interface AppDef {
   id: AppId
@@ -59,7 +59,6 @@ const APPS: AppDef[] = [
   { id: 'dida', name: '滴答清单lite', icon: DidaIcon, color: '' },
   { id: 'reader', name: '每日简报', icon: ReaderIcon, color: '' },
   { id: 'cron', name: '计划任务', icon: CronIcon, color: '' },
-  { id: 'baidu', name: '百度网盘', icon: BaiduIcon, color: '' },
   { id: 'quark', name: '夸克网盘', icon: QuarkIcon, color: '' }
 ]
 
@@ -402,7 +401,6 @@ function App() {
       case 'dida': return <DidaApp />
       case 'reader': return <ReaderApp />
       case 'cron': return <CronApp />
-      case 'baidu': return <NetdiskApp brand="baidu" />
       case 'quark': return <NetdiskApp brand="quark" />
       default: return null
     }

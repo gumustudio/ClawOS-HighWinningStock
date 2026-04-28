@@ -632,7 +632,7 @@ export default function NotesApp() {
   }
 
   return (
-    <div className="flex h-full bg-[linear-gradient(180deg,#fffdf9_0%,#fffaf1_100%)] text-slate-800">
+    <div className="flex h-full bg-white text-slate-800">
       {/* Sidebar */}
       <div className="w-72 border-r border-amber-100 bg-white/80 backdrop-blur-sm flex flex-col">
         <div className="p-4 border-b border-amber-100 flex items-center justify-between bg-white/70">
@@ -727,7 +727,7 @@ export default function NotesApp() {
       </div>
 
       {/* Main Content (Editor) */}
-      <div className="flex-1 flex flex-col min-w-0">
+      <div className="flex-1 flex flex-col min-w-0 bg-white">
         {activeNote ? (
           <>
             <div className="px-10 pt-6 pb-2 flex items-start justify-between gap-6">
@@ -777,7 +777,7 @@ export default function NotesApp() {
               </div>
             </div>
             <div className="flex-1 overflow-auto px-10 pb-10">
-              <div className="mx-auto h-full max-w-4xl">
+              <div className="mx-auto h-full max-w-6xl">
                 <NoteEditor
                   value={activeNote.content}
                   notesDir={storageDir}

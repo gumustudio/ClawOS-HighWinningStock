@@ -3,7 +3,7 @@ import { Bell, Check, Trash2 } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useNotificationStore, type Notification } from '../store/useNotificationStore'
 import { format, isToday, isYesterday } from 'date-fns'
-import { DashboardIcon, MonitorIcon, FilesIcon, VideoIcon, LocalMusicIcon, DownloadsIcon, NotesIcon, ReaderIcon, CronIcon, BaiduIcon, QuarkIcon, NeteaseIcon, OpenClawIcon, DidaIcon } from './Icons'
+import { DashboardIcon, MonitorIcon, FilesIcon, VideoIcon, LocalMusicIcon, DownloadsIcon, NotesIcon, ReaderIcon, CronIcon, QuarkIcon, NeteaseIcon, OpenClawIcon, DidaIcon } from './Icons'
 import AIQuantIcon from './AIQuantIcon'
 import { createAppNotifier } from '../apps/notify'
 
@@ -18,7 +18,6 @@ const APP_ICONS: Record<string, React.ElementType> = {
   localmusic: LocalMusicIcon,
   downloads: DownloadsIcon,
   notes: NotesIcon,
-  baidu: BaiduIcon,
   quark: QuarkIcon,
   reader: ReaderIcon,
   cron: CronIcon,

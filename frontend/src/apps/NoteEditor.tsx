@@ -199,8 +199,8 @@ export default function NoteEditor({ value, onChange, notesDir }: NoteEditorProp
   }
 
   return (
-    <div className="flex h-full flex-col overflow-hidden rounded-[28px] border border-amber-100 bg-[#fffdf8] shadow-[0_20px_60px_rgba(148,113,57,0.10)]">
-      <div className="flex flex-wrap items-center gap-2 border-b border-amber-100/80 bg-white/80 px-6 py-3 backdrop-blur-sm">
+    <div className="flex h-full flex-col overflow-hidden rounded-[28px] border border-slate-200 bg-white shadow-[0_20px_60px_rgba(15,23,42,0.08)]">
+      <div className="flex flex-wrap items-center gap-2 border-b border-slate-200 bg-white px-6 py-3">
         <EditorToolbarButton label="一级标题" active={editor.isActive('heading', { level: 1 })} onClick={() => editor.chain().focus().toggleHeading({ level: 1 }).run()}>
           <span className="text-sm font-black">H1</span>
         </EditorToolbarButton>
@@ -254,14 +254,26 @@ export default function NoteEditor({ value, onChange, notesDir }: NoteEditorProp
         </EditorToolbarButton>
         {editor.isActive('table') && (
           <>
-            <EditorToolbarButton label="新增行" onClick={() => editor.chain().focus().addRowAfter().run()}>
-              <span className="text-xs font-semibold">+R</span>
+            <EditorToolbarButton label="在当前行上方插入一行" onClick={() => editor.chain().focus().addRowBefore().run()}>
+              <span className="text-[10px] font-semibold">行↑</span>
             </EditorToolbarButton>
-            <EditorToolbarButton label="新增列" onClick={() => editor.chain().focus().addColumnAfter().run()}>
-              <span className="text-xs font-semibold">+C</span>
+            <EditorToolbarButton label="在当前行下方插入一行" onClick={() => editor.chain().focus().addRowAfter().run()}>
+              <span className="text-[10px] font-semibold">行↓</span>
+            </EditorToolbarButton>
+            <EditorToolbarButton label="在当前列左侧插入一列" onClick={() => editor.chain().focus().addColumnBefore().run()}>
+              <span className="text-[10px] font-semibold">列←</span>
+            </EditorToolbarButton>
+            <EditorToolbarButton label="在当前列右侧插入一列" onClick={() => editor.chain().focus().addColumnAfter().run()}>
+              <span className="text-[10px] font-semibold">列→</span>
+            </EditorToolbarButton>
+            <EditorToolbarButton label="删除当前行" onClick={() => editor.chain().focus().deleteRow().run()}>
+              <span className="text-[10px] font-semibold">删行</span>
+            </EditorToolbarButton>
+            <EditorToolbarButton label="删除当前列" onClick={() => editor.chain().focus().deleteColumn().run()}>
+              <span className="text-[10px] font-semibold">删列</span>
             </EditorToolbarButton>
             <EditorToolbarButton label="删除表格" onClick={() => editor.chain().focus().deleteTable().run()}>
-              <span className="text-xs font-semibold">Del</span>
+              <span className="text-[10px] font-semibold">删表</span>
             </EditorToolbarButton>
           </>
         )}
@@ -269,7 +281,7 @@ export default function NoteEditor({ value, onChange, notesDir }: NoteEditorProp
           <QuestionMarkCircleIcon className="h-4 w-4" />
         </EditorToolbarButton>
       </div>
-      <div className="flex-1 overflow-auto bg-[radial-gradient(circle_at_top,_rgba(255,248,219,0.5),_transparent_40%)]">
+      <div className="flex-1 overflow-auto bg-white">
         <EditorContent editor={editor} />
       </div>
 
