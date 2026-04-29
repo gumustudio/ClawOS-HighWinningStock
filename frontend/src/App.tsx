@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { Minus, Square, X, Settings } from 'lucide-react'
-import { DashboardIcon, MonitorIcon, FilesIcon, VideoIcon, LocalMusicIcon, DownloadsIcon, NotesIcon, ReaderIcon, CronIcon, QuarkIcon, NeteaseIcon, OpenClawIcon, DidaIcon } from './components/Icons'
+import { DashboardIcon, MonitorIcon, FilesIcon, VideoIcon, LocalMusicIcon, DownloadsIcon, NotesIcon, ReaderIcon, QuarkIcon, NeteaseIcon, OpenClawIcon, OpenCodeIcon, DidaIcon } from './components/Icons'
 import NeteaseLogin from './components/NeteaseLogin'
 import DidaLogin from './components/DidaLogin'
 import LoginScreen from './components/LoginScreen'
@@ -20,8 +20,8 @@ import AIQuantApp from "./apps/AIQuantApp"
 import AIQuantIcon from "./components/AIQuantIcon"
 import NetdiskApp from './apps/NetdiskApp'
 import ReaderApp from './apps/ReaderApp'
-import CronApp from './apps/CronApp'
 import DidaApp from './apps/DidaApp'
+import OpenCodeApp from './apps/OpenCodeApp'
 import { withBasePath } from './lib/basePath'
 import { buildEmbeddedOpenClawIframeUrl, primeEmbeddedOpenClawStorage } from './lib/openclawStorage'
 import DesktopWidgets from './components/DesktopWidgets'
@@ -31,7 +31,7 @@ import { useNotificationStore } from './store/useNotificationStore'
 
 
 
-type AppId = 'aiquant' | 'dashboard' | 'monitor' | 'openclaw' | 'files' | 'video' | 'music' | 'localmusic' | 'downloads' | 'notes' | 'quark' | 'reader' | 'cron' | 'dida'
+type AppId = 'aiquant' | 'dashboard' | 'monitor' | 'openclaw' | 'opencode' | 'files' | 'video' | 'music' | 'localmusic' | 'downloads' | 'notes' | 'quark' | 'reader' | 'dida'
 
 interface AppDef {
   id: AppId
@@ -50,6 +50,7 @@ const APPS: AppDef[] = [
   { id: 'dashboard', name: '系统状态', icon: DashboardIcon, color: '' },
   { id: 'monitor', name: '服务监控', icon: MonitorIcon, color: '' },
   { id: 'openclaw', name: 'OpenClaw', icon: OpenClawIcon, color: '' },
+  { id: 'opencode', name: 'OpenCode', icon: OpenCodeIcon, color: '' },
   { id: 'files', name: '文件总管', icon: FilesIcon, color: '' },
   { id: 'video', name: '影视仓', icon: VideoIcon, color: '' },
   { id: 'music', name: '网易云', icon: NeteaseIcon, color: '' },
@@ -58,7 +59,6 @@ const APPS: AppDef[] = [
   { id: 'notes', name: '随手小记', icon: NotesIcon, color: '' },
   { id: 'dida', name: '滴答清单lite', icon: DidaIcon, color: '' },
   { id: 'reader', name: '每日简报', icon: ReaderIcon, color: '' },
-  { id: 'cron', name: '计划任务', icon: CronIcon, color: '' },
   { id: 'quark', name: '夸克网盘', icon: QuarkIcon, color: '' }
 ]
 
@@ -153,6 +153,7 @@ function App() {
   const [defaultFullscreen, setDefaultFullscreen] = useState(false)
   const [wallpaper, setWallpaper] = useState(WALLPAPERS[0])
   const [showWidgets, setShowWidgets] = useState(true)
+  const [showMiniDock, setShowMiniDock] = useState(true)
   const [dockHideDelay, setDockHideDelay] = useState(2)
   const [stickyNotifications, setStickyNotifications] = useState(false)
   const [neteaseCookie, setNeteaseCookie] = useState('')
@@ -201,6 +202,7 @@ function App() {
         setDefaultFullscreen(ui.defaultFullscreen)
         setWallpaper(ui.wallpaper || WALLPAPERS[0])
         setShowWidgets(ui.showWidgets)
+        setShowMiniDock(ui.showMiniDock ?? true)
         setDockHideDelay(ui.dockHideDelay)
         setStickyNotifications(ui.stickyNotifications)
       })
@@ -223,12 +225,13 @@ function App() {
       defaultFullscreen,
       wallpaper,
       showWidgets,
+      showMiniDock,
       dockHideDelay,
       stickyNotifications,
     }).catch((error) => {
       console.error('Failed to save server UI config', error)
     })
-  }, [isAuthenticated, uiConfigReady, dockSize, autoHideDock, defaultFullscreen, wallpaper, showWidgets, dockHideDelay, stickyNotifications])
+  }, [isAuthenticated, uiConfigReady, dockSize, autoHideDock, defaultFullscreen, wallpaper, showWidgets, showMiniDock, dockHideDelay, stickyNotifications])
 
   useEffect(() => {
     setNotificationBehavior({
@@ -353,6 +356,10 @@ function App() {
     }
   }
 
+  const handleDockAppClick = (appId: AppId) => {
+    setActiveApp((current) => (current === appId ? null : appId))
+  }
+
   // Login handler
   const handleLogin = async (inputPassword: string) => {
     setLoginLoading(true)
@@ -383,6 +390,8 @@ function App() {
     return <LoginScreen onLogin={handleLogin} error={loginError} loading={loginLoading} />
   }
 
+  const showBottomDock = !showMiniDock
+
   const renderAppContent = (id: AppId) => {
     switch (id) {
       case 'aiquant': return <AIQuantApp />
@@ -392,6 +401,7 @@ function App() {
         return openClawIframeUrl
           ? <IframeApp url={openClawIframeUrl} title="OpenClaw" />
           : <div className="flex h-full items-center justify-center bg-slate-50 text-sm text-slate-500">正在准备 OpenClaw 连接...</div>
+      case 'opencode': return <OpenCodeApp />
       case 'files': return <IframeApp url={withBasePath('/proxy/filebrowser/')} title="FileBrowser" />
       case 'video': return <VideoApp />
       case 'music': return <MusicApp isActive={activeApp === 'music'} />
@@ -400,7 +410,6 @@ function App() {
       case 'notes': return <NotesApp />
       case 'dida': return <DidaApp />
       case 'reader': return <ReaderApp />
-      case 'cron': return <CronApp />
       case 'quark': return <NetdiskApp brand="quark" />
       default: return null
     }
@@ -428,6 +437,25 @@ function App() {
           </div>
           <span className="font-bold text-slate-800 tracking-wide">ClawOS</span>
         </div>
+        {showMiniDock && (
+          <div className="absolute left-1/2 top-0 hidden h-full -translate-x-1/2 items-center md:flex">
+            <div className="flex h-7 items-center gap-0.5 rounded-xl border border-white/30 bg-white/20 px-1 shadow-[inset_0_1px_0_rgba(255,255,255,0.38)] backdrop-blur-xl">
+            {APPS.map((app) => (
+              <button
+                key={app.id}
+                onClick={() => handleDockAppClick(app.id)}
+                title={app.name}
+                className={`relative flex h-6 w-7 items-center justify-center rounded-lg transition-colors duration-150 ${activeApp === app.id ? 'bg-white/70 shadow-[0_1px_3px_rgba(15,23,42,0.12)]' : 'hover:bg-white/45'}`}
+              >
+                <app.icon className="h-3.5 w-3.5 drop-shadow-[0_1px_1px_rgba(15,23,42,0.18)]" />
+                {openedApps.has(app.id) && (
+                  <span className={`absolute bottom-0.5 left-1/2 h-0.5 -translate-x-1/2 rounded-full ${activeApp === app.id ? 'w-3 bg-slate-700' : 'w-1.5 bg-slate-500/70'}`} />
+                )}
+              </button>
+            ))}
+            </div>
+          </div>
+        )}
         <div className="flex items-center space-x-4">
           {miniStats && (
             <div className="flex items-center space-x-3 bg-white/40 px-2 py-0.5 rounded-full border border-white/30 shadow-inner">
@@ -584,6 +612,18 @@ function App() {
                           </label>
                         </div>
                         <div className="flex items-center justify-between">
+                          <label className="text-sm font-medium text-slate-700">显示顶部迷你 Dock</label>
+                          <label className="relative inline-flex items-center cursor-pointer">
+                            <input
+                              type="checkbox"
+                              className="sr-only peer"
+                              checked={showMiniDock}
+                              onChange={(e) => setShowMiniDock(e.target.checked)}
+                            />
+                            <div className="w-9 h-5 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-blue-500"></div>
+                          </label>
+                        </div>
+                        <div className="flex items-center justify-between">
                           <div>
                             <label className="text-sm font-medium text-slate-700">通知常驻显示</label>
                             <p className="text-xs text-slate-500 mt-1">关闭后通知会自动消失；开启后需手动关闭。</p>
@@ -710,8 +750,8 @@ function App() {
           paddingLeft: activeApp && maximizedApps.has(activeApp) ? 0 : windowPadX,
           paddingRight: activeApp && maximizedApps.has(activeApp) ? 0 : windowPadX,
           paddingBottom: activeApp && maximizedApps.has(activeApp) 
-            ? (isDockVisible ? dockSize + 40 : 0)
-            : (isDockVisible ? dockSize + 48 : 48)
+            ? (showBottomDock && isDockVisible ? dockSize + 40 : 0)
+            : (showBottomDock && isDockVisible ? dockSize + 48 : 48)
         }}
         transition={{ type: "spring", damping: 25, stiffness: 300 }}
         className={`absolute z-30 flex flex-col pointer-events-none inset-0`}
@@ -726,40 +766,40 @@ function App() {
           } ${activeApp ? 'pointer-events-auto' : 'pointer-events-none'}`}
         >
           {/* Window Header - macOS Style */}
-          <div className="h-12 bg-white/40 border-b border-white/50 flex items-center px-4 flex-shrink-0 select-none relative transition-colors duration-300" onDoubleClick={handleMaximize}>
+          <div className="h-8 bg-white/40 border-b border-white/50 flex items-center px-3 flex-shrink-0 select-none relative transition-colors duration-300" onDoubleClick={handleMaximize}>
             
             {/* Traffic Lights (macOS buttons) */}
-            <div className="flex items-center space-x-2 z-10">
+            <div className="flex items-center space-x-1.5 z-10">
               <div 
                 onClick={handleClose}
-                className="w-3.5 h-3.5 rounded-full bg-[#ff5f56] border border-[#e0443e] cursor-pointer hover:bg-[#ff5f56]/80 flex items-center justify-center group"
+                className="w-3 h-3 rounded-full bg-[#ff5f56] border border-[#e0443e] cursor-pointer hover:bg-[#ff5f56]/80 flex items-center justify-center group"
               >
-                <X className="w-2.5 h-2.5 text-black/50 opacity-0 group-hover:opacity-100 transition-opacity" />
+                <X className="w-2 h-2 text-black/50 opacity-0 group-hover:opacity-100 transition-opacity" />
               </div>
               <div 
                 onClick={handleMinimize}
-                className="w-3.5 h-3.5 rounded-full bg-[#ffbd2e] border border-[#dea123] cursor-pointer hover:bg-[#ffbd2e]/80 flex items-center justify-center group"
+                className="w-3 h-3 rounded-full bg-[#ffbd2e] border border-[#dea123] cursor-pointer hover:bg-[#ffbd2e]/80 flex items-center justify-center group"
               >
-                <Minus className="w-2.5 h-2.5 text-black/50 opacity-0 group-hover:opacity-100 transition-opacity" />
+                <Minus className="w-2 h-2 text-black/50 opacity-0 group-hover:opacity-100 transition-opacity" />
               </div>
               <div 
                 onClick={handleMaximize}
-                className="w-3.5 h-3.5 rounded-full bg-[#27c93f] border border-[#1aab29] cursor-pointer hover:bg-[#27c93f]/80 flex items-center justify-center group"
+                className="w-3 h-3 rounded-full bg-[#27c93f] border border-[#1aab29] cursor-pointer hover:bg-[#27c93f]/80 flex items-center justify-center group"
               >
-                <Square className="w-2 h-2 text-black/50 opacity-0 group-hover:opacity-100 transition-opacity" />
+                <Square className="w-1.5 h-1.5 text-black/50 opacity-0 group-hover:opacity-100 transition-opacity" />
               </div>
             </div>
 
             {/* Centered Title */}
             <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-              <div className="flex items-center space-x-2">
+              <div className="flex items-center space-x-1.5">
                 {(() => {
                   const currentApp = APPS.find(a => a.id === (activeApp || lastActiveApp))
                   const AppIcon = currentApp?.icon || DashboardIcon
                   return (
                     <>
-                      <AppIcon className="w-4 h-4 text-slate-600 drop-shadow-sm" />
-                      <div className="font-semibold text-sm text-slate-700 tracking-wide drop-shadow-sm">
+                      <AppIcon className="w-3.5 h-3.5 text-slate-600 drop-shadow-sm" />
+                      <div className="font-semibold text-xs text-slate-700 tracking-wide drop-shadow-sm">
                         {currentApp?.name}
                       </div>
                     </>
@@ -789,7 +829,7 @@ function App() {
       </motion.div>
 
       {/* Bottom edge trigger for auto-hide dock */}
-      {autoHideDock && !isDockVisible && (
+      {showBottomDock && autoHideDock && !isDockVisible && (
         <div 
           className="absolute bottom-0 left-0 right-0 h-4 z-50 pointer-events-auto"
           onMouseEnter={() => setIsHoveringDock(true)}
@@ -797,43 +837,41 @@ function App() {
       )}
 
       {/* Bottom Dock */}
-      <div 
-        className={`absolute bottom-4 left-0 right-0 z-40 flex justify-center pointer-events-none transition-transform duration-500 ease-in-out ${autoHideDock && !isDockVisible ? 'translate-y-32' : 'translate-y-0'}`}
-      >
-        <div 
-          className="bg-white/30 backdrop-blur-2xl border border-white/40 p-2 rounded-3xl shadow-[0_20px_40px_rgba(0,0,0,0.1)] flex items-center space-x-2 pointer-events-auto"
-          onMouseEnter={() => setIsHoveringDock(true)}
-          onMouseLeave={() => setIsHoveringDock(false)}
+      {showBottomDock && (
+        <div
+          className={`absolute bottom-4 left-0 right-0 z-40 flex justify-center pointer-events-none transition-transform duration-500 ease-in-out ${autoHideDock && !isDockVisible ? 'translate-y-32' : 'translate-y-0'}`}
         >
-          {APPS.map(app => (
-            <div 
-              key={app.id} 
-              onClick={(e) => {
-                e.stopPropagation()
-                if (activeApp === app.id) {
-                  setActiveApp(null) // minimize if already active
-                } else {
-                  setActiveApp(app.id) // open or bring to front
-                }
-              }}
-              className="relative group cursor-pointer"
-            >
-              <div 
-                className={`rounded-2xl flex items-center justify-center transition-all duration-300 ${activeApp === app.id ? 'bg-white/80 scale-110 shadow-lg' : 'bg-white/30 hover:bg-white/60 hover:-translate-y-2 hover:shadow-xl'}`}
-                style={{ width: dockSize, height: dockSize }}
+          <div
+            className="bg-white/30 backdrop-blur-2xl border border-white/40 p-2 rounded-3xl shadow-[0_20px_40px_rgba(0,0,0,0.1)] flex items-center space-x-2 pointer-events-auto"
+            onMouseEnter={() => setIsHoveringDock(true)}
+            onMouseLeave={() => setIsHoveringDock(false)}
+          >
+            {APPS.map(app => (
+              <div
+                key={app.id}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  handleDockAppClick(app.id)
+                }}
+                className="relative group cursor-pointer"
               >
-                <app.icon className={`${app.color}`} style={{ width: dockSize / 2, height: dockSize / 2 }} />
+                <div
+                  className={`rounded-2xl flex items-center justify-center transition-all duration-300 ${activeApp === app.id ? 'bg-white/80 scale-110 shadow-lg' : 'bg-white/30 hover:bg-white/60 hover:-translate-y-2 hover:shadow-xl'}`}
+                  style={{ width: dockSize, height: dockSize }}
+                >
+                  <app.icon className={`${app.color}`} style={{ width: dockSize / 2, height: dockSize / 2 }} />
+                </div>
+                {activeApp === app.id && (
+                  <div className="absolute -bottom-1.5 left-1/2 transform -translate-x-1/2 w-1.5 h-1.5 bg-slate-600 rounded-full" />
+                )}
+                {activeApp !== app.id && openedApps.has(app.id) && (
+                  <div className="absolute -bottom-1.5 left-1/2 transform -translate-x-1/2 w-1 h-1 bg-slate-400 rounded-full" />
+                )}
               </div>
-              {activeApp === app.id && (
-                <div className="absolute -bottom-1.5 left-1/2 transform -translate-x-1/2 w-1.5 h-1.5 bg-slate-600 rounded-full" />
-              )}
-              {activeApp !== app.id && openedApps.has(app.id) && (
-                <div className="absolute -bottom-1.5 left-1/2 transform -translate-x-1/2 w-1 h-1 bg-slate-400 rounded-full" />
-              )}
-            </div>
-          ))}
+            ))}
+          </div>
         </div>
-      </div>
+      )}
     </div>
   )
 }

@@ -88,6 +88,7 @@ export type HealthCheckDefinition =
       expectedText?: string;
       acceptedStatuses?: number[];
       timeoutMs?: number;
+      authHeader?: string;
     }
   | {
       type: 'jsonrpc';
@@ -128,8 +129,9 @@ export async function runServiceHealthCheck(healthCheck: HealthCheckDefinition, 
   if (healthCheck.type === 'http') {
     try {
       const fetchInit: RequestInit = {};
-      if (authHeader) {
-        fetchInit.headers = { 'Authorization': authHeader };
+      const effectiveAuthHeader = healthCheck.authHeader || authHeader;
+      if (effectiveAuthHeader) {
+        fetchInit.headers = { 'Authorization': effectiveAuthHeader };
       }
       const response = await fetchWithTimeout(healthCheck.url, fetchInit, healthCheck.timeoutMs);
       const acceptedStatuses = healthCheck.acceptedStatuses ?? [200];

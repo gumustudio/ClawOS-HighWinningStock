@@ -29,6 +29,7 @@ export interface ServerUiConfig {
   defaultFullscreen: boolean;
   wallpaper: string;
   showWidgets: boolean;
+  showMiniDock: boolean;
   dockHideDelay: number;
   stickyNotifications: boolean;
   musicQuality: string;
@@ -56,6 +57,7 @@ export const DEFAULT_SERVER_UI = {
   defaultFullscreen: false,
   wallpaper: '',
   showWidgets: true,
+  showMiniDock: true,
   dockHideDelay: 2,
   stickyNotifications: false,
   musicQuality: 'lossless',
@@ -79,6 +81,7 @@ function normalizeUiConfig(raw: unknown): ServerUiConfig {
     defaultFullscreen: normalizeBoolean(parsed.defaultFullscreen, DEFAULT_SERVER_UI.defaultFullscreen),
     wallpaper: normalizeString(parsed.wallpaper, DEFAULT_SERVER_UI.wallpaper),
     showWidgets: normalizeBoolean(parsed.showWidgets, DEFAULT_SERVER_UI.showWidgets),
+    showMiniDock: normalizeBoolean(parsed.showMiniDock, DEFAULT_SERVER_UI.showMiniDock),
     dockHideDelay: normalizeNumber(parsed.dockHideDelay, DEFAULT_SERVER_UI.dockHideDelay),
     stickyNotifications: normalizeBoolean(parsed.stickyNotifications, DEFAULT_SERVER_UI.stickyNotifications),
     musicQuality: normalizeString(parsed.musicQuality, DEFAULT_SERVER_UI.musicQuality),

@@ -6,6 +6,7 @@ export interface ServerUiConfig {
   defaultFullscreen: boolean
   wallpaper: string
   showWidgets: boolean
+  showMiniDock: boolean
   dockHideDelay: number
   stickyNotifications: boolean
   musicQuality: string

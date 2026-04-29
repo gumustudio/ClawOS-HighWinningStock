@@ -125,21 +125,6 @@ export const ReaderIcon = ({ className, style }: { className?: string, style?: R
   </svg>
 );
 
-export const CronIcon = ({ className, style }: { className?: string, style?: React.CSSProperties }) => (
-  <svg viewBox="0 0 32 32" fill="none" className={className} style={style} xmlns="http://www.w3.org/2000/svg">
-    <circle cx="16" cy="16" r="14" fill="url(#cron-bg)"/>
-    <circle cx="16" cy="16" r="10" stroke="#fff" strokeWidth="2" strokeDasharray="2 4" opacity="0.4"/>
-    <path d="M16 10v6l4 4" stroke="#fff" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
-    <circle cx="16" cy="16" r="2" fill="#fff"/>
-    <defs>
-      <linearGradient id="cron-bg" x1="2" y1="2" x2="30" y2="30" gradientUnits="userSpaceOnUse">
-        <stop stopColor="#818cf8" />
-        <stop offset="1" stopColor="#4338ca" />
-      </linearGradient>
-    </defs>
-  </svg>
-);
-
 export const BaiduIcon = ({ className, style }: { className?: string, style?: React.CSSProperties }) => (
   <svg viewBox="0 0 32 32" className={className} style={style} xmlns="http://www.w3.org/2000/svg">
     <circle cx="16" cy="16" r="14" fill="url(#baidu-bg)" />
@@ -195,6 +180,23 @@ export const OpenClawIcon = ({ className, style }: { className?: string, style?:
     <circle cx="75" cy="35" r="6" fill="#050810" />
     <circle cx="46" cy="34" r="2" fill="#00e5cc" />
     <circle cx="76" cy="34" r="2" fill="#00e5cc" />
+  </svg>
+);
+
+export const OpenCodeIcon = ({ className, style }: { className?: string, style?: React.CSSProperties }) => (
+  <svg viewBox="0 0 32 32" fill="none" className={className} style={style} xmlns="http://www.w3.org/2000/svg">
+    <rect x="3" y="3" width="26" height="26" rx="8" fill="url(#opencode-bg)" />
+    <rect x="7" y="7" width="18" height="18" fill="#B7B1B1" />
+    <rect x="10" y="13" width="9" height="9" fill="#4B4646" />
+    <rect x="13" y="10" width="9" height="9" fill="#0F1115" />
+    <rect x="16" y="13" width="3" height="3" fill="#F1ECEC" opacity="0.88" />
+    <path d="M9 25h16" stroke="#F1ECEC" strokeWidth="1.5" strokeLinecap="square" opacity="0.32" />
+    <defs>
+      <linearGradient id="opencode-bg" x1="3" y1="3" x2="29" y2="29" gradientUnits="userSpaceOnUse">
+        <stop stopColor="#2F3448" />
+        <stop offset="1" stopColor="#0A0A0A" />
+      </linearGradient>
+    </defs>
   </svg>
 );
 

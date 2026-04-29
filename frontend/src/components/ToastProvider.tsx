@@ -2,7 +2,7 @@ import { useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { X } from 'lucide-react'
 import { useNotificationStore, type Notification } from '../store/useNotificationStore'
-import { DashboardIcon, MonitorIcon, FilesIcon, VideoIcon, LocalMusicIcon, DownloadsIcon, NotesIcon, ReaderIcon, CronIcon, QuarkIcon, NeteaseIcon, OpenClawIcon, DidaIcon } from './Icons'
+import { DashboardIcon, MonitorIcon, FilesIcon, VideoIcon, LocalMusicIcon, DownloadsIcon, NotesIcon, ReaderIcon, QuarkIcon, NeteaseIcon, OpenClawIcon, OpenCodeIcon, DidaIcon } from './Icons'
 import AIQuantIcon from './AIQuantIcon'
 
 function isCriticalNotification(notification: Notification) {
@@ -14,6 +14,7 @@ const APP_ICONS: Record<string, React.ElementType> = {
   dashboard: DashboardIcon,
   monitor: MonitorIcon,
   openclaw: OpenClawIcon,
+  opencode: OpenCodeIcon,
   files: FilesIcon,
   video: VideoIcon,
   music: NeteaseIcon,
@@ -22,7 +23,6 @@ const APP_ICONS: Record<string, React.ElementType> = {
   notes: NotesIcon,
   quark: QuarkIcon,
   reader: ReaderIcon,
-  cron: CronIcon,
   dida: DidaIcon,
 }
 

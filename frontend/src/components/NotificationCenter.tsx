@@ -3,15 +3,15 @@ import { Bell, Check, Trash2 } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useNotificationStore, type Notification } from '../store/useNotificationStore'
 import { format, isToday, isYesterday } from 'date-fns'
-import { DashboardIcon, MonitorIcon, FilesIcon, VideoIcon, LocalMusicIcon, DownloadsIcon, NotesIcon, ReaderIcon, CronIcon, QuarkIcon, NeteaseIcon, OpenClawIcon, DidaIcon } from './Icons'
+import { DashboardIcon, MonitorIcon, FilesIcon, VideoIcon, LocalMusicIcon, DownloadsIcon, NotesIcon, ReaderIcon, QuarkIcon, NeteaseIcon, OpenClawIcon, OpenCodeIcon, DidaIcon } from './Icons'
 import AIQuantIcon from './AIQuantIcon'
-import { createAppNotifier } from '../apps/notify'
 
 const APP_ICONS: Record<string, React.ElementType> = {
   aiquant: AIQuantIcon,
   dashboard: DashboardIcon,
   monitor: MonitorIcon,
   openclaw: OpenClawIcon,
+  opencode: OpenCodeIcon,
   files: FilesIcon,
   video: VideoIcon,
   music: NeteaseIcon,
@@ -20,11 +20,8 @@ const APP_ICONS: Record<string, React.ElementType> = {
   notes: NotesIcon,
   quark: QuarkIcon,
   reader: ReaderIcon,
-  cron: CronIcon,
   dida: DidaIcon,
 }
-
-const notifyTester = createAppNotifier('dashboard')
 
 // Group notifications by time
 const groupNotifications = (notifications: Notification[]) => {
@@ -98,85 +95,9 @@ const NotificationItem = ({ notification, onClosePanel }: { notification: Notifi
 
 export default function NotificationCenter() {
   const [isOpen, setIsOpen] = useState(false)
-  const [isCreatingSamples, setIsCreatingSamples] = useState(false)
   const { notifications, unreadCount, markAllAsRead, clearAll, init, hydrated } = useNotificationStore()
   const groupedNotifications = groupNotifications(notifications)
   const panelRef = useRef<HTMLDivElement>(null)
-
-  const createSampleNotifications = async () => {
-    if (isCreatingSamples) {
-      return
-    }
-
-    setIsCreatingSamples(true)
-
-    try {
-      await notifyTester({
-        title: '测试通知：普通提醒',
-        message: '这是默认信息样式，用来检查列表排版和基础 toast 表现。',
-        level: 'info',
-        metadata: { category: 'test', sampleType: 'info' },
-      })
-
-      await notifyTester({
-        title: '测试通知：成功状态',
-        message: '这是成功样式，用来确认常规成功提示在通知中心里的观感。',
-        level: 'success',
-        metadata: { category: 'test', sampleType: 'success' },
-      })
-
-      await notifyTester({
-        title: '测试通知：警告状态',
-        message: '这是警告样式，用来检查重要但非致命事件的可见性。',
-        level: 'warning',
-        metadata: { category: 'test', sampleType: 'warning', riskPriority: 'medium' },
-      })
-
-      await notifyTester({
-        title: '测试通知：高危状态',
-        message: '这是高危样式，会常驻显示，用来验证红色强化提醒是否足够醒目。',
-        level: 'error',
-        metadata: { category: 'test', sampleType: 'critical', riskPriority: 'critical' },
-      })
-
-      await Promise.all([
-        notifyTester({
-          title: '测试通知：聚合样式',
-          message: '模拟第 1 条同类异常。',
-          level: 'warning',
-          metadata: { category: 'test', sampleType: 'batch' },
-          batchKey: 'notification-center-sample-batch',
-          batchTitle: '测试通知：聚合样式',
-          batchWindowMs: 500,
-          batchMessageBuilder: (count, latestMessage) => `${latestMessage}（本轮共聚合 ${count} 条测试通知）`,
-        }),
-        notifyTester({
-          title: '测试通知：聚合样式',
-          message: '模拟第 2 条同类异常。',
-          level: 'warning',
-          metadata: { category: 'test', sampleType: 'batch' },
-          batchKey: 'notification-center-sample-batch',
-          batchTitle: '测试通知：聚合样式',
-          batchWindowMs: 500,
-          batchMessageBuilder: (count, latestMessage) => `${latestMessage}（本轮共聚合 ${count} 条测试通知）`,
-        }),
-        notifyTester({
-          title: '测试通知：聚合样式',
-          message: '模拟第 3 条同类异常。',
-          level: 'warning',
-          metadata: { category: 'test', sampleType: 'batch' },
-          batchKey: 'notification-center-sample-batch',
-          batchTitle: '测试通知：聚合样式',
-          batchWindowMs: 500,
-          batchMessageBuilder: (count, latestMessage) => `${latestMessage}（本轮共聚合 ${count} 条测试通知）`,
-        }),
-      ])
-    } finally {
-      window.setTimeout(() => {
-        setIsCreatingSamples(false)
-      }, 700)
-    }
-  }
 
   useEffect(() => {
     if (!hydrated) {
@@ -227,19 +148,8 @@ export default function NotificationCenter() {
             {/* Header */}
             <div className="flex shrink-0 items-center justify-between p-4 border-b border-slate-200 bg-white">
               <h3 className="text-sm font-semibold text-slate-800">通知中心</h3>
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => {
-                    void createSampleNotifications()
-                  }}
-                  disabled={isCreatingSamples}
-                  title="生成一组测试通知"
-                  className="px-2.5 py-1.5 text-xs font-medium text-slate-600 bg-slate-100 hover:bg-slate-200 disabled:opacity-60 disabled:cursor-not-allowed rounded-md transition-colors"
-                >
-                  {isCreatingSamples ? '生成中...' : '测试通知'}
-                </button>
-                {notifications.length > 0 && (
-                  <div className="flex gap-2">
+              {notifications.length > 0 && (
+                <div className="flex gap-2">
                   <button
                     onClick={() => {
                       void markAllAsRead()
@@ -258,9 +168,8 @@ export default function NotificationCenter() {
                     >
                       <Trash2 className="w-4 h-4" />
                     </button>
-                  </div>
-                )}
-              </div>
+                </div>
+              )}
             </div>
 
             {/* Content List */}

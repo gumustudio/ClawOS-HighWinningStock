@@ -11,6 +11,12 @@ export default function IframeApp({ url, title }: IframeAppProps) {
 
   useEffect(() => {
     setLoading(true)
+
+    const timeout = window.setTimeout(() => {
+      setLoading(false)
+    }, 5000)
+
+    return () => window.clearTimeout(timeout)
   }, [url])
 
   return (

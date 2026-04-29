@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { getHardwareStats, getMonitoredServices, getNetworkStats, getOpenClawBackupStatus, getResticBackupStatus, getSecuritySurfaceStatus, getTimeshiftStatus, MonitoredServiceDefinition } from '../utils/probe';
 import { logger } from '../utils/logger';
 import { getAria2Secret } from '../utils/localServices';
+import { getOpenCodeBasicAuthHeader } from '../utils/opencodeService';
 
 import fs from 'fs/promises';
 import path from 'path';
@@ -41,6 +42,7 @@ import speedtestRoutes from './speedtest';
 import stockAnalysisRoutes from './stock-analysis';
 import didaRoutes from './dida';
 import notificationsRoutes from './notifications';
+import opencodeRoutes from './opencode';
 
 const router = Router();
 
@@ -90,6 +92,19 @@ const monitoredServices: MonitoredServiceDefinition[] = [
       url: 'http://127.0.0.1:18789/',
       expectedText: 'OpenClaw Control',
       successMessage: 'AI 网关页面可正常访问'
+    }
+  },
+  {
+    id: 'opencode',
+    unit: 'opencode-web.service',
+    description: 'OpenCode Web 前端。用于在 ClawOS 内远程操作本机 OpenCode，会受应用锁二次验证保护。',
+    kind: 'core',
+    healthCheck: {
+      type: 'http',
+      url: 'http://127.0.0.1:4096/global/health',
+      expectedText: 'healthy',
+      authHeader: getOpenCodeBasicAuthHeader(),
+      successMessage: 'OpenCode Web 接口响应正常'
     }
   },
   {
@@ -456,5 +471,6 @@ router.use('/dida', didaRoutes);
 
 // --- Notifications API ---
 router.use('/notifications', notificationsRoutes);
+router.use('/opencode', opencodeRoutes);
 
 export default router;
