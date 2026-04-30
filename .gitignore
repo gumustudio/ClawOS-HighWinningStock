@@ -34,7 +34,7 @@ filebrowser/*.tar.gz.*
 *.pfx
 
 # Dev-only files (not for public repo)
-AGENTS.md
+AGENTS.md*
 CHANGELOG.md
 docs/
 
