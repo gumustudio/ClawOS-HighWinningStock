@@ -4,6 +4,7 @@ import fs from 'fs/promises';
 import { createReadStream, statSync, existsSync } from 'fs';
 import path from 'path';
 import crypto from 'crypto';
+import { spawn } from 'child_process';
 import * as mm from 'music-metadata';
 import { cloudsearch, lyric } from 'NeteaseCloudMusicApi';
 import { ensureRemoteCoverCached, findNeteaseTrackCacheMatch, getNeteaseTrackCacheById, inferTitleArtistFromFilename, upsertNeteaseTrackCache } from '../utils/musicCache';
@@ -73,6 +74,20 @@ interface WarmupStatus {
   lastRunAt: string | null;
 }
 
+interface MusicSearchDownloadItem {
+  id: string;
+  title: string;
+  artist: string;
+  album: string;
+  duration: string;
+  fileSize: string;
+  format: string;
+  source: string;
+  sourceLabel: string;
+  cover: string;
+  raw: Record<string, unknown>;
+}
+
 let warmupStatus: WarmupStatus = {
   scannedDir: '',
   running: false,
@@ -86,6 +101,100 @@ let warmupStatus: WarmupStatus = {
 let activeWarmupPromise: Promise<void> | null = null;
 
 const getHash = (str: string) => crypto.createHash('md5').update(str).digest('hex');
+
+const MUSICDL_WORKER = path.resolve(__dirname, '..', '..', 'scripts', 'musicdl_worker.py');
+const ALLOWED_MUSICDL_SOURCES = new Set(['netease', 'qq', 'kuwo', 'kugou', 'migu']);
+
+function normalizeMusicdlSources(rawValue: unknown) {
+  const rawSources = typeof rawValue === 'string' ? rawValue.split(',') : [];
+  const sources = rawSources
+    .map((source) => source.trim())
+    .filter((source) => ALLOWED_MUSICDL_SOURCES.has(source));
+  return sources.length > 0 ? Array.from(new Set(sources)) : ['kuwo', 'kugou', 'migu'];
+}
+
+function normalizeMusicdlLimit(rawValue: unknown) {
+  const parsed = Number(rawValue);
+  if (!Number.isFinite(parsed)) return 10;
+  return Math.max(1, Math.min(Math.floor(parsed), 30));
+}
+
+async function ensureDirectory(dir: string) {
+  await fs.mkdir(dir, { recursive: true });
+}
+
+async function cleanupMusicdlRuntimeFiles(dir: string) {
+  try {
+    const entries = await fs.readdir(dir, { withFileTypes: true });
+    await Promise.all(entries.map(async (entry) => {
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        await cleanupMusicdlRuntimeFiles(fullPath);
+        return;
+      }
+      if (entry.name === 'search_results.pkl' || entry.name === 'download_results.pkl') {
+        await fs.rm(fullPath, { force: true });
+      }
+    }));
+  } catch (error) {
+    logger.error(`Cleanup musicdl runtime files failed: ${(error as Error).message}`, { module: 'LocalMusic' });
+  }
+}
+
+function runMusicdlWorker<T>(args: string[], options: { input?: unknown; timeoutMs?: number } = {}): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const child = spawn('python3', [MUSICDL_WORKER, ...args], {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: {
+        ...process.env,
+        PYTHONIOENCODING: 'utf-8'
+      }
+    });
+
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+    const timeout = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      child.kill('SIGKILL');
+      reject(new Error('musicdl worker timed out'));
+    }, options.timeoutMs ?? 120000);
+
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk.toString('utf8');
+    });
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk.toString('utf8');
+    });
+    child.on('error', (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      reject(error);
+    });
+    child.on('close', (code) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      try {
+        const parsed = JSON.parse(stdout || '{}');
+        if (code !== 0 || parsed.success === false) {
+          reject(new Error(parsed.error || stderr || `musicdl worker failed with code ${code}`));
+          return;
+        }
+        resolve(parsed as T);
+      } catch (error) {
+        reject(new Error(`musicdl worker returned invalid JSON: ${(error as Error).message}`));
+      }
+    });
+
+    if (options.input !== undefined) {
+      child.stdin.write(JSON.stringify(options.input));
+    }
+    child.stdin.end();
+  });
+}
 
 const getAudioMimeType = (filePath: string) => {
   switch (path.extname(filePath).toLowerCase()) {
@@ -568,6 +677,56 @@ router.get('/list', async (req, res) => {
 
 router.get('/warmup-status', async (req, res) => {
   res.json({ success: true, data: warmupStatus });
+});
+
+router.get('/search-download', async (req, res) => {
+  const keyword = typeof req.query.keyword === 'string' ? req.query.keyword.trim() : '';
+  if (!keyword) {
+    return res.status(400).json({ success: false, error: 'Keyword is required' });
+  }
+
+  try {
+    const musicDir = await getMusicDir(req);
+    await ensureDirectory(musicDir);
+    const sources = normalizeMusicdlSources(req.query.sources).join(',');
+    const limit = normalizeMusicdlLimit(req.query.limit);
+    const result = await runMusicdlWorker<{ success: true; data: MusicSearchDownloadItem[] }>([
+      'search',
+      '--keyword', keyword,
+      '--sources', sources,
+      '--limit', String(limit),
+      '--work-dir', musicDir
+    ], { timeoutMs: 45000 });
+    res.json({ success: true, data: result.data });
+  } catch (error: any) {
+    logger.error(`Music download search failed: ${error?.message || String(error)}`, { module: 'LocalMusic' });
+    res.status(500).json({ success: false, error: error?.message || 'Search failed' });
+  }
+});
+
+router.post('/search-download/download', async (req, res) => {
+  const songs = Array.isArray(req.body?.songs) ? req.body.songs.slice(0, 30) as MusicSearchDownloadItem[] : [];
+  if (songs.length === 0) {
+    return res.status(400).json({ success: false, error: 'No songs selected' });
+  }
+
+  try {
+    const musicDir = await getMusicDir(req);
+    await ensureDirectory(musicDir);
+    const sources = normalizeMusicdlSources(req.body?.sources).join(',');
+    const limit = normalizeMusicdlLimit(req.body?.limit);
+    const result = await runMusicdlWorker<{ success: true; data: { count: number; dir: string } }>([
+      'download',
+      '--sources', sources,
+      '--limit', String(limit),
+      '--work-dir', musicDir
+    ], { input: songs, timeoutMs: 10 * 60 * 1000 });
+    await cleanupMusicdlRuntimeFiles(musicDir);
+    res.json({ success: true, data: result.data });
+  } catch (error: any) {
+    logger.error(`Music download failed: ${error?.message || String(error)}`, { module: 'LocalMusic' });
+    res.status(500).json({ success: false, error: error?.message || 'Download failed' });
+  }
 });
 
 router.get('/cover/:id', async (req, res) => {

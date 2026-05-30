@@ -1,26 +1,44 @@
 import { useState, useEffect } from 'react'
 
+const NETEASE_USER_CACHE_KEY = 'clawos-netease-user'
+
+function loadCachedUser() {
+  try {
+    const raw = localStorage.getItem(NETEASE_USER_CACHE_KEY)
+    return raw ? JSON.parse(raw) : null
+  } catch {
+    return null
+  }
+}
+
 export default function NeteaseLogin({ currentCookie, onCookieUpdate }: { currentCookie: string, onCookieUpdate: (cookie: string) => void }) {
   const [qrImg, setQrImg] = useState('')
   const [qrKey, setQrKey] = useState('')
-  const [statusMsg, setStatusMsg] = useState('未登录')
+  const [statusMsg, setStatusMsg] = useState('')
   const [isChecking, setIsChecking] = useState(false)
-  const [userInfo, setUserInfo] = useState<any>(null)
+  const [userInfo, setUserInfo] = useState<any>(() => loadCachedUser())
 
   useEffect(() => {
     if (currentCookie) {
-      // Check status
+      setStatusMsg(userInfo ? `已登录: ${userInfo.nickname}` : '')
       fetch('/api/system/music/login/status')
         .then(res => res.json())
         .then(data => {
           if (data.success && data.data && data.data.profile) {
-            setUserInfo(data.data.profile)
-            setStatusMsg(`已登录: ${data.data.profile.nickname}`)
+            const profile = data.data.profile
+            setUserInfo(profile)
+            setStatusMsg(`已登录: ${profile.nickname}`)
+            localStorage.setItem(NETEASE_USER_CACHE_KEY, JSON.stringify(profile))
           } else {
+            setUserInfo(null)
+            localStorage.removeItem(NETEASE_USER_CACHE_KEY)
             setStatusMsg('Cookie 已失效，请重新登录')
           }
         })
         .catch(() => setStatusMsg('状态获取失败'))
+    } else {
+      setUserInfo(null)
+      localStorage.removeItem(NETEASE_USER_CACHE_KEY)
     }
   }, [currentCookie])
 
@@ -89,7 +107,7 @@ export default function NeteaseLogin({ currentCookie, onCookieUpdate }: { curren
               <img src={userInfo.avatarUrl} alt="avatar" className="w-8 h-8 rounded-full shadow" />
               <div className="flex-1 truncate text-sm font-bold text-slate-700">{userInfo.nickname}</div>
               <button 
-                onClick={() => { onCookieUpdate(''); setUserInfo(null); setStatusMsg('未登录') }}
+                onClick={() => { onCookieUpdate(''); setUserInfo(null); setStatusMsg(''); localStorage.removeItem(NETEASE_USER_CACHE_KEY) }}
                 className="text-xs text-rose-500 hover:text-rose-600 font-medium"
               >
                 退出

@@ -2,10 +2,22 @@ import { useState, useEffect } from 'react';
 import { CheckCircle, AlertCircle, ExternalLink } from 'lucide-react';
 import { withBasePath } from '../lib/basePath';
 
+const DIDA_STATUS_CACHE_KEY = 'clawos-dida-status';
+
+function loadCachedStatus(): { status: 'success' | 'idle'; message: string } | null {
+  try {
+    const raw = localStorage.getItem(DIDA_STATUS_CACHE_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
 export default function DidaLogin() {
-  const [loading, setLoading] = useState(true);
-  const [status, setStatus] = useState<'idle' | 'success' | 'error'>('idle');
-  const [message, setMessage] = useState('');
+  const cached = loadCachedStatus();
+  const [loading, setLoading] = useState(false);
+  const [status, setStatus] = useState<'idle' | 'success' | 'error'>(cached?.status || 'idle');
+  const [message, setMessage] = useState(cached?.message || '');
 
   const checkStatus = async () => {
     try {
@@ -14,15 +26,15 @@ export default function DidaLogin() {
       if (data.success && data.connected) {
         setStatus('success');
         setMessage('已连接到滴答清单开放平台');
+        localStorage.setItem(DIDA_STATUS_CACHE_KEY, JSON.stringify({ status: 'success', message: '已连接到滴答清单开放平台' }));
       } else {
         setStatus('idle');
         setMessage('未授权');
+        localStorage.setItem(DIDA_STATUS_CACHE_KEY, JSON.stringify({ status: 'idle', message: '未授权' }));
       }
     } catch (err) {
       setStatus('error');
       setMessage('获取状态失败');
-    } finally {
-      setLoading(false);
     }
   };
 
@@ -72,6 +84,7 @@ export default function DidaLogin() {
       await fetch(withBasePath('/api/system/dida/logout'), { method: 'POST' });
       setStatus('idle');
       setMessage('已断开连接');
+      localStorage.setItem(DIDA_STATUS_CACHE_KEY, JSON.stringify({ status: 'idle', message: '已断开连接' }));
     } catch (err) {
       // ignore
     } finally {

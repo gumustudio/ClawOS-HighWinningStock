@@ -71,6 +71,74 @@ test('warmup-status endpoint returns status payload', async () => {
   assert.ok(typeof response.body.data.total === 'number');
 });
 
+test('music download search uses controlled worker and local music directory', async () => {
+  const originalHome = process.env.HOME;
+  const originalStub = process.env.CLAWOS_MUSICDL_TEST_STUB;
+  const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), 'clawos-localmusic-download-search-'));
+  process.env.HOME = tempHome;
+  process.env.CLAWOS_MUSICDL_TEST_STUB = '1';
+
+  try {
+    const musicDir = path.join(tempHome, 'music');
+    const { default: localmusicRoutes } = await import(`../src/routes/localmusic?ts=${Date.now()}`);
+    const app = express();
+    app.use('/api/system/localmusic', localmusicRoutes);
+
+    const response = await request(app)
+      .get('/api/system/localmusic/search-download?keyword=测试&sources=netease,evil,qq&limit=2')
+      .set('x-music-dir', encodeURIComponent(musicDir));
+
+    assert.equal(response.status, 200);
+    assert.equal(response.body.success, true);
+    assert.equal(response.body.data.length, 2);
+    assert.deepEqual(response.body.data.map((item: { source: string }) => item.source), ['NeteaseMusicClient', 'QQMusicClient']);
+    await fs.access(musicDir);
+  } finally {
+    process.env.HOME = originalHome;
+    if (originalStub === undefined) delete process.env.CLAWOS_MUSICDL_TEST_STUB;
+    else process.env.CLAWOS_MUSICDL_TEST_STUB = originalStub;
+  }
+});
+
+test('music download endpoint downloads selected worker results', async () => {
+  const originalHome = process.env.HOME;
+  const originalStub = process.env.CLAWOS_MUSICDL_TEST_STUB;
+  const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), 'clawos-localmusic-download-'));
+  process.env.HOME = tempHome;
+  process.env.CLAWOS_MUSICDL_TEST_STUB = '1';
+
+  try {
+    const musicDir = path.join(tempHome, 'music');
+    const { default: localmusicRoutes } = await import(`../src/routes/localmusic?ts=${Date.now()}`);
+    const app = express();
+    app.use(express.json());
+    app.use('/api/system/localmusic', localmusicRoutes);
+
+    const response = await request(app)
+      .post('/api/system/localmusic/search-download/download')
+      .set('x-music-dir', encodeURIComponent(musicDir))
+      .send({
+        sources: 'netease',
+        songs: [{
+          id: 'demo',
+          title: '测试歌曲',
+          artist: '测试歌手',
+          source: 'NeteaseMusicClient',
+          raw: { song_name: '测试歌曲', singers: ['测试歌手'], source: 'NeteaseMusicClient' }
+        }]
+      });
+
+    assert.equal(response.status, 200);
+    assert.equal(response.body.success, true);
+    assert.equal(response.body.data.count, 1);
+    assert.equal(response.body.data.dir, musicDir);
+  } finally {
+    process.env.HOME = originalHome;
+    if (originalStub === undefined) delete process.env.CLAWOS_MUSICDL_TEST_STUB;
+    else process.env.CLAWOS_MUSICDL_TEST_STUB = originalStub;
+  }
+});
+
 test('localmusic list backfills netease track cache from scanned DB entries', async () => {
   const originalHome = process.env.HOME;
   const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), 'clawos-localmusic-cache-test-'));
