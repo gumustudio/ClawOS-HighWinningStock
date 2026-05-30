@@ -5,8 +5,6 @@ import fs from 'fs/promises';
 import path from 'path';
 import { getAlistAdminPassword, getAria2Secret } from './localServices';
 
-import os from 'os';
-
 const execPromise = util.promisify(exec);
 
 function getProjectRoot(): string {
@@ -15,7 +13,6 @@ function getProjectRoot(): string {
 
 const CLAWOS_WATCHDOG_STATE_FILE = path.join(getProjectRoot(), 'logs', 'clawos-watchdog-status.json');
 const CLAWOS_DISPLAY_WATCHDOG_STATE_FILE = path.join(getProjectRoot(), 'logs', 'clawos-display-watchdog-status.json');
-const OPENCLAW_WATCHDOG_STATE_FILE = path.join(os.homedir(), '.openclaw', 'watchdog-status.json');
 
 export const getHardwareStats = async () => {
   try {
@@ -241,8 +238,7 @@ async function getCoreServiceHealth(definition: MonitoredServiceDefinition, isRu
 const getWatchdogSnapshot = async (serviceId: string): Promise<WatchdogStatusSnapshot | null> => {
   const stateFileMap: Record<string, string> = {
     'clawos-watchdog': CLAWOS_WATCHDOG_STATE_FILE,
-    'clawos-display-watchdog': CLAWOS_DISPLAY_WATCHDOG_STATE_FILE,
-    'openclaw-watchdog': OPENCLAW_WATCHDOG_STATE_FILE
+    'clawos-display-watchdog': CLAWOS_DISPLAY_WATCHDOG_STATE_FILE
   };
 
   const stateFile = stateFileMap[serviceId];
@@ -384,18 +380,6 @@ export interface DirectoryBackupStatus {
   count: number;
   error?: string;
   message?: string;
-}
-
-export interface OpenClawBackupStatus {
-  rootDirectory: string;
-  indexFile: string;
-  hasIndexFile: boolean;
-  latestIndexedVersion: string | null;
-  latestIndexedStamp: string | null;
-  syncStatus: 'ok' | 'warning' | 'missing-index';
-  syncMessage: string;
-  versions: DirectoryBackupStatus;
-  zips: DirectoryBackupStatus;
 }
 
 export interface ResticBackupStatus {
@@ -581,49 +565,6 @@ async function readResticCloudStatus() {
   }
 }
 
-function getOpenClawEntryBaseName(entryName: string | null | undefined) {
-  if (!entryName) {
-    return null;
-  }
-
-  return entryName.replace(/\.zip$/i, '');
-}
-
-function matchesIndexedBackupEntry(entryName: string | null, version: string | null, stamp: string | null) {
-  if (!entryName || !version || !stamp) {
-    return false;
-  }
-
-  return entryName.startsWith(`${version}-`) && entryName.endsWith(`-${stamp}`);
-}
-
-async function readLatestOpenClawIndex(indexFile: string) {
-  const content = await fs.readFile(indexFile, 'utf-8');
-  const lines = content
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter((line) => /^\|\s*v[^|]+\|/.test(line));
-
-  const latestLine = lines.at(-1);
-  if (!latestLine) {
-    return { version: null, stamp: null };
-  }
-
-  const cells = latestLine
-    .split('|')
-    .map((cell) => cell.trim())
-    .filter(Boolean);
-
-  if (cells.length < 4) {
-    return { version: null, stamp: null };
-  }
-
-  return {
-    version: cells[0] || null,
-    stamp: cells[3] || null
-  };
-}
-
 export const getDirectoryBackupStatus = async (targetDir: string): Promise<DirectoryBackupStatus> => {
   try {
     await fs.access(targetDir);
@@ -670,60 +611,6 @@ export const getDirectoryBackupStatus = async (targetDir: string): Promise<Direc
       error: error.code === 'ENOENT' ? '备份目录不存在' : error.message
     };
   }
-};
-
-export const getOpenClawBackupStatus = async (): Promise<OpenClawBackupStatus> => {
-  const backupDir = path.join(process.env.HOME || '/root', 'OpenCLawSpace', 'ClawBackUp');
-  const indexFile = path.join(backupDir, 'VERSIONS.md');
-
-  let hasIndexFile = false;
-  let latestIndexedVersion: string | null = null;
-  let latestIndexedStamp: string | null = null;
-  try {
-    await fs.access(indexFile);
-    hasIndexFile = true;
-    const indexInfo = await readLatestOpenClawIndex(indexFile);
-    latestIndexedVersion = indexInfo.version;
-    latestIndexedStamp = indexInfo.stamp;
-  } catch {
-    hasIndexFile = false;
-  }
-
-  const [versions, zips] = await Promise.all([
-    getDirectoryBackupStatus(path.join(backupDir, 'versions')),
-    getDirectoryBackupStatus(path.join(backupDir, 'zips'))
-  ]);
-
-  const latestVersionBackup = getOpenClawEntryBaseName(versions.latest);
-  const latestZipBackup = getOpenClawEntryBaseName(zips.latest);
-  const syncTargets = [latestVersionBackup, latestZipBackup].filter(Boolean);
-  const allBackupFormatsAligned = syncTargets.length > 0 && syncTargets.every((entry) => entry === syncTargets[0]);
-
-  let syncStatus: OpenClawBackupStatus['syncStatus'] = 'ok';
-  let syncMessage = 'versions 与 zips 最新备份一致';
-
-  if (!hasIndexFile) {
-    syncStatus = 'missing-index';
-    syncMessage = '未找到 VERSIONS.md，无法校验索引是否与备份同步';
-  } else if (!allBackupFormatsAligned) {
-    syncStatus = 'warning';
-    syncMessage = 'versions 与 zips 的最新备份不一致，请检查备份流程';
-  } else if (!matchesIndexedBackupEntry(latestVersionBackup, latestIndexedVersion, latestIndexedStamp)) {
-    syncStatus = 'warning';
-    syncMessage = 'VERSIONS.md 最新索引与实际最新备份不一致';
-  }
-
-  return {
-    rootDirectory: backupDir,
-    indexFile,
-    hasIndexFile,
-    latestIndexedVersion,
-    latestIndexedStamp,
-    syncStatus,
-    syncMessage,
-    versions,
-    zips
-  };
 };
 
 export const getResticBackupStatus = async (): Promise<ResticBackupStatus> => {

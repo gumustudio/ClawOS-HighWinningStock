@@ -29,6 +29,7 @@ interface FrontendLogEntry {
 let buffer: FrontendLogEntry[] = []
 let flushTimer: ReturnType<typeof setTimeout> | null = null
 let isFlushing = false
+let canFlush = false
 
 const BUFFER_SIZE = 20
 const FLUSH_INTERVAL_MS = 10_000
@@ -49,13 +50,13 @@ function pushEntry(level: LogLevel, component: string, message: string, data?: R
   buffer.push(entry)
 
   // 达到阈值立即上报
-  if (buffer.length >= BUFFER_SIZE) {
+  if (canFlush && buffer.length >= BUFFER_SIZE) {
     flush()
   }
 }
 
 async function flush(): Promise<void> {
-  if (isFlushing || buffer.length === 0) return
+  if (!canFlush || isFlushing || buffer.length === 0) return
 
   const entries = buffer
   buffer = []
@@ -84,6 +85,13 @@ function ensureFlushTimer(): void {
   flushTimer = setInterval(() => {
     flush()
   }, FLUSH_INTERVAL_MS)
+}
+
+export function setFrontendLoggerEnabled(enabled: boolean): void {
+  canFlush = enabled
+  if (enabled) {
+    void flush()
+  }
 }
 
 // ==================== 公开 API ====================

@@ -73,18 +73,6 @@ export function saveReaderArticle(articleId: string, saved: boolean) {
   })
 }
 
-export function translateReaderArticle(articleId: string) {
-  return requestJson<ReaderArticle>(`/api/system/reader/articles/${articleId}/translate`, {
-    method: 'POST',
-  })
-}
-
-export function summarizeReaderArticle(articleId: string) {
-  return requestJson<ReaderArticle>(`/api/system/reader/articles/${articleId}/summarize`, {
-    method: 'POST',
-  })
-}
-
 export function clearReaderRuntimeData() {
   return requestJson<void>(`/api/system/reader/runtime-data`, {
     method: 'DELETE',

@@ -23,7 +23,7 @@ systemctl --user --no-pager --plain --full status clawos-display-watchdog.timer 
 echo
 
 echo "[ports]"
-ss -ltnp | grep -E ':(3001|18789|18790)\b' || true
+ss -ltnp | grep -E ':(3001|18790)\b' || true
 echo
 
 echo "[health]"

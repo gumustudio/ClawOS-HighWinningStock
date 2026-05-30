@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { getHardwareStats, getMonitoredServices, getNetworkStats, getOpenClawBackupStatus, getResticBackupStatus, getSecuritySurfaceStatus, getTimeshiftStatus, MonitoredServiceDefinition } from '../utils/probe';
+import { getHardwareStats, getMonitoredServices, getNetworkStats, getResticBackupStatus, getSecuritySurfaceStatus, getTimeshiftStatus, MonitoredServiceDefinition } from '../utils/probe';
 import { logger } from '../utils/logger';
 import { getAria2Secret } from '../utils/localServices';
 import { getOpenCodeBasicAuthHeader } from '../utils/opencodeService';
@@ -83,18 +83,6 @@ const monitoredServices: MonitoredServiceDefinition[] = [
     }
   },
   {
-    id: 'openclaw',
-    unit: 'openclaw-gateway.service',
-    description: 'OpenClaw AI 网关。负责 AI 对话和相关能力，如果它异常，AI 功能会不可用。',
-    kind: 'core',
-    healthCheck: {
-      type: 'http',
-      url: 'http://127.0.0.1:18789/',
-      expectedText: 'OpenClaw Control',
-      successMessage: 'AI 网关页面可正常访问'
-    }
-  },
-  {
     id: 'opencode',
     unit: 'opencode-web.service',
     description: 'OpenCode Web 前端。用于在 ClawOS 内远程操作本机 OpenCode，会受应用锁二次验证保护。',
@@ -149,12 +137,6 @@ const monitoredServices: MonitoredServiceDefinition[] = [
     unit: 'clawos-display-watchdog.timer',
     description: '远程显示巡检定时器。会定时检查远程显示保活是否正常，减少远程黑屏问题。',
     kind: 'watchdog'
-  },
-  {
-    id: 'openclaw-watchdog',
-    unit: 'openclaw-watchdog.timer',
-    description: 'OpenClaw 自动巡检定时器。会定时检查 AI 网关是否正常，并在异常时尝试修复。',
-    kind: 'watchdog'
   }
 ];
 
@@ -199,16 +181,6 @@ router.get('/timeshift', async (req, res) => {
     res.json({ success: true, data: status, error: null });
   } catch (error: any) {
     logger.error(`Timeshift Probe Error: ${error.message}`, { module: 'SystemProbe' });
-    res.status(500).json({ success: false, data: null, error: error.message });
-  }
-});
-
-router.get('/openclaw-backup', async (_req, res) => {
-  try {
-    const status = await getOpenClawBackupStatus();
-    res.json({ success: true, data: status, error: null });
-  } catch (error: any) {
-    logger.error(`OpenClaw Backup Probe Error: ${error.message}`, { module: 'SystemProbe' });
     res.status(500).json({ success: false, data: null, error: error.message });
   }
 });

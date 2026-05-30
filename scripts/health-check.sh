@@ -4,7 +4,6 @@ set -euo pipefail
 
 ROOT_URL="${1:-http://localhost:3001}"
 FILEBROWSER_URL="${ROOT_URL}/proxy/filebrowser/"
-OPENCLAW_URL="${ROOT_URL}/proxy/openclaw/"
 API_URL="${ROOT_URL}/api/system/hardware"
 
 check_http() {
@@ -39,7 +38,6 @@ check_http() {
 echo "ClawOS health check"
 echo "Root URL: ${ROOT_URL}"
 
-check_http "OpenClaw HTML" "$OPENCLAW_URL" "OpenClaw Control"
 check_http "FileBrowser HTML" "$FILEBROWSER_URL" "File Browser"
 check_http "System API" "$API_URL" '"success":true'
 

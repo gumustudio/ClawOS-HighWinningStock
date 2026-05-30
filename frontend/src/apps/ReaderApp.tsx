@@ -5,7 +5,6 @@ import {
   BookmarkSlashIcon,
   FolderOpenIcon,
   PlusIcon,
-  SparklesIcon,
   TrashIcon,
 } from '@heroicons/react/24/outline'
 
@@ -23,8 +22,6 @@ import {
   markReaderArticleRead,
   pullReaderSubscriptions,
   saveReaderArticle,
-  summarizeReaderArticle,
-  translateReaderArticle,
 } from './Reader/api'
 import { formatReaderDate, importanceStars } from './Reader/format'
 import type { ReaderArticle, ReaderCategory, ReaderFeed, ReaderOverview, ReaderView } from './Reader/types'
@@ -55,8 +52,6 @@ export default function ReaderApp() {
   const [deleteFeedId, setDeleteFeedId] = useState<string | null>(null)
   const [toast, setToast] = useState<ToastState>(null)
   const [readerDir, setReaderDir] = useState('')
-  const [translatingArticleId, setTranslatingArticleId] = useState<string | null>(null)
-  const [summarizingArticleId, setSummarizingArticleId] = useState<string | null>(null)
   const [articleOffset, setArticleOffset] = useState(0)
   const [hasMoreArticles, setHasMoreArticles] = useState(false)
   const [showClearDialog, setShowClearDialog] = useState(false)
@@ -266,72 +261,6 @@ export default function ReaderApp() {
       })
     } catch (error) {
       console.error('Failed to mark article read', error)
-    }
-  }
-
-  async function handleTranslateArticle(article: ReaderArticle) {
-    setTranslatingArticleId(article.id)
-    try {
-      const updated = await translateReaderArticle(article.id)
-      setActiveArticle(updated)
-      setArticles((current) => current.map((item) => (item.id === updated.id ? updated : item)))
-      setOverview((current) => {
-        if (!current) {
-          return current
-        }
-        return {
-          ...current,
-          latestArticles: current.latestArticles.map((item) => (item.id === updated.id ? updated : item)),
-          savedArticles: current.savedArticles.map((item) => (item.id === updated.id ? updated : item)),
-          brief: {
-            ...current.brief,
-            sections: current.brief.sections.map((section) => ({
-              ...section,
-              highlights: section.highlights.map((item) => (item.id === updated.id ? updated : item)),
-              latest: section.latest.map((item) => (item.id === updated.id ? updated : item)),
-            })),
-          },
-        }
-      })
-      setToast({ tone: 'success', message: '全文翻译已完成' })
-    } catch (error) {
-      console.error('Failed to translate article', error)
-      setToast({ tone: 'error', message: error instanceof Error ? error.message : '翻译失败' })
-    } finally {
-      setTranslatingArticleId(null)
-    }
-  }
-
-  async function handleSummarizeArticle(article: ReaderArticle) {
-    setSummarizingArticleId(article.id)
-    try {
-      const updated = await summarizeReaderArticle(article.id)
-      setActiveArticle(updated)
-      setArticles((current) => current.map((item) => (item.id === updated.id ? updated : item)))
-      setOverview((current) => {
-        if (!current) {
-          return current
-        }
-        return {
-          ...current,
-          latestArticles: current.latestArticles.map((item) => (item.id === updated.id ? updated : item)),
-          savedArticles: current.savedArticles.map((item) => (item.id === updated.id ? updated : item)),
-          brief: {
-            ...current.brief,
-            sections: current.brief.sections.map((section) => ({
-              ...section,
-              highlights: section.highlights.map((item) => (item.id === updated.id ? updated : item)),
-              latest: section.latest.map((item) => (item.id === updated.id ? updated : item)),
-            })),
-          },
-        }
-      })
-      setToast({ tone: 'success', message: 'AI 摘要已更新' })
-    } catch (error) {
-      console.error('Failed to summarize article', error)
-      setToast({ tone: 'error', message: error instanceof Error ? error.message : 'AI 摘要失败' })
-    } finally {
-      setSummarizingArticleId(null)
     }
   }
 
@@ -567,27 +496,6 @@ export default function ReaderApp() {
                     {activeArticle.savedAt ? <BookmarkSlashIcon className="mr-2 inline-block h-4 w-4" /> : <BookmarkIcon className="mr-2 inline-block h-4 w-4" />}
                     {activeArticle.savedAt ? '取消稍后阅读' : '加入稍后阅读'}
                   </button>
-                  {(activeArticle.contentText || activeArticle.summary.length > 0) && (
-                    <button
-                      type="button"
-                      onClick={() => void handleSummarizeArticle(activeArticle)}
-                      disabled={summarizingArticleId === activeArticle.id}
-                      className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-600 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      <SparklesIcon className="mr-2 inline-block h-4 w-4" />
-                      {summarizingArticleId === activeArticle.id ? '摘要中...' : activeArticle.aiSummary ? '重新 AI 摘要' : 'AI 摘要'}
-                    </button>
-                  )}
-                  {(activeArticle.contentText || activeArticle.summary.length > 0) && (
-                    <button
-                      type="button"
-                      onClick={() => void handleTranslateArticle(activeArticle)}
-                      disabled={translatingArticleId === activeArticle.id}
-                      className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-600 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      {translatingArticleId === activeArticle.id ? '翻译中...' : activeArticle.translatedText ? '重新翻译' : '全文翻译'}
-                    </button>
-                  )}
                   <a href={activeArticle.url} target="_blank" rel="noreferrer" className="rounded-xl bg-orange-500 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-orange-600">
                     阅读原文
                   </a>
@@ -609,11 +517,6 @@ export default function ReaderApp() {
                     <span key={keyword} className="rounded-full bg-white px-3 py-1 text-xs text-slate-600 shadow-sm">#{keyword}</span>
                   ))}
                 </div>
-                {!activeArticle.translatedText && (activeArticle.contentText || activeArticle.summary.length > 0) && (
-                  <div className="mt-4 rounded-2xl border border-amber-100 bg-white/80 px-4 py-3 text-xs leading-6 text-slate-500">
-                    可点击右上角 <span className="font-semibold text-slate-700">全文翻译</span> 生成中文译文。英文资讯效果最佳。
-                  </div>
-                )}
                 {activeArticle.aiSummarizedAt && (
                   <div className="mt-4 text-xs text-slate-400">AI 摘要生成于 {formatReaderDate(activeArticle.aiSummarizedAt)}</div>
                 )}
@@ -625,20 +528,6 @@ export default function ReaderApp() {
                   {activeArticle.contentText || '当前资讯未提供正文内容，可点击右上角阅读原文。'}
                 </div>
               </div>
-
-              {activeArticle.translatedText && (
-                <div className="mt-6 rounded-3xl border border-emerald-100 bg-emerald-50/60 p-6 shadow-sm">
-                  <div className="mb-4 flex items-center justify-between gap-4">
-                    <div className="text-sm font-semibold text-emerald-800">中文全文翻译</div>
-                    <div className="text-xs text-emerald-700/80">
-                      {activeArticle.translatedAt ? `生成于 ${formatReaderDate(activeArticle.translatedAt)}` : '已生成'}
-                    </div>
-                  </div>
-                  <div className="whitespace-pre-wrap text-[15px] leading-8 text-slate-700">
-                    {activeArticle.translatedText}
-                  </div>
-                </div>
-              )}
             </div>
           </div>
         ) : (

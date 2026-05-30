@@ -1,7 +1,6 @@
 import Parser from 'rss-parser';
 
 import { logger } from '../../utils/logger';
-import { requestOpenClawChatCompletion } from '../../utils/openclawModelClient';
 import type {
   ReaderArticle,
   ReaderDailyBrief,
@@ -49,36 +48,6 @@ function normalizeArticleRecord(article: ReaderArticle): ReaderArticle {
 
 function defaultSummary(article: ReaderArticle) {
   return article.aiSummary && article.aiSummary.length > 0 ? article.aiSummary : article.summary;
-}
-
-async function summarizeArticleWithAi(article: ReaderArticle) {
-  const sourceText = article.contentText || article.summary.join('\n');
-  if (!sourceText.trim()) {
-    return null;
-  }
-
-  const response = await requestOpenClawChatCompletion([
-    {
-      role: 'system',
-      content: '你是资讯编辑助手。请把输入资讯提炼成 3 条简洁的中文摘要，每条一句。只返回 JSON，格式必须是 {"summary":["...","...","..."]}。不要输出 markdown，不要解释。',
-    },
-    {
-      role: 'user',
-      content: `标题：${article.title}\n分类：${article.category}\n正文：\n${sourceText}`,
-    },
-  ], { maxTokens: 1200, temperature: 0.2 });
-
-  try {
-    const json = JSON.parse(response) as { summary?: unknown };
-    const summary = Array.isArray(json.summary) ? json.summary.filter((item): item is string => typeof item === 'string' && item.trim().length > 0).slice(0, 3) : [];
-    return summary.length > 0 ? summary : null;
-  } catch {
-    return response
-      .split(/\n+/)
-      .map((line) => line.replace(/^[-*\d.、\s]+/, '').trim())
-      .filter(Boolean)
-      .slice(0, 3);
-  }
 }
 
 function mergeArticles(existing: ReaderArticle[], incoming: ReaderArticle[]): ReaderArticle[] {
@@ -344,57 +313,6 @@ export async function getReaderDailyBrief(readerDir: string, date: string): Prom
   const generated = buildDailyBrief(date, articles);
   await saveDailyBrief(readerDir, generated);
   return generated;
-}
-
-export async function translateReaderArticle(readerDir: string, articleId: string) {
-  const article = await getReaderArticle(readerDir, articleId);
-  if (!article) {
-    return null;
-  }
-
-  const sourceText = article.contentText || article.summary.join('\n');
-  if (!sourceText.trim()) {
-    throw new Error('当前资讯没有可翻译的正文内容');
-  }
-
-  const translatedText = await requestOpenClawChatCompletion([
-    {
-      role: 'system',
-      content: '你是专业翻译助手。请把用户提供的英文资讯完整翻译成简体中文，保留原始结构和段落，不要额外总结，不要解释，不要省略内容。',
-    },
-    {
-      role: 'user',
-      content: `请把以下资讯全文翻译成简体中文。\n\n标题：${article.title}\n\n正文：\n${sourceText}`,
-    },
-  ], { maxTokens: 6000, temperature: 0.1 });
-
-  const updated = {
-    ...article,
-    translatedText,
-    translatedAt: new Date().toISOString(),
-  };
-  await saveArticle(readerDir, updated);
-  return normalizeArticleRecord(updated);
-}
-
-export async function summarizeReaderArticle(readerDir: string, articleId: string) {
-  const article = await getReaderArticle(readerDir, articleId);
-  if (!article) {
-    return null;
-  }
-
-  const aiSummary = await summarizeArticleWithAi(article);
-  if (!aiSummary || aiSummary.length === 0) {
-    throw new Error('AI 未返回可用摘要');
-  }
-
-  const updated = {
-    ...article,
-    aiSummary,
-    aiSummarizedAt: new Date().toISOString(),
-  };
-  await saveArticle(readerDir, updated);
-  return normalizeArticleRecord(updated);
 }
 
 export async function clearReaderData(readerDir: string) {

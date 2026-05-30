@@ -118,8 +118,6 @@ export function getServiceActionSuggestion(service: MonitorServiceItem) {
   switch (service.id) {
     case 'clawos':
       return '建议先确认 ClawOS 主界面接口是否可访问，必要时重启 clawos 服务。'
-    case 'openclaw':
-      return '建议先检查 OpenClaw 网关是否能打开，再决定是否重启 AI 网关服务。'
     case 'filebrowser':
       return '建议先检查文件管理页面能否打开，异常时可重启 FileBrowser 服务。'
     case 'aria2':

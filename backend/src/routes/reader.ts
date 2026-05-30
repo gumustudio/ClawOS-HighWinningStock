@@ -15,9 +15,7 @@ import {
   rebuildReaderBrief,
   removeReaderArticleFromLater,
   saveReaderArticleForLater,
-  summarizeReaderArticle,
   syncReaderNow,
-  translateReaderArticle,
   clearReaderData,
 } from '../services/reader/service';
 import type { ReaderCategory } from '../services/reader/types';
@@ -131,19 +129,6 @@ router.get('/articles', async (req, res) => {
   }
 });
 
-router.post('/articles/:id/summarize', async (req, res) => {
-  try {
-    const article = await summarizeReaderArticle(await getReaderDir(), req.params.id);
-    if (!article) {
-      return res.status(404).json({ success: false, error: '资讯不存在' });
-    }
-    res.json({ success: true, data: article });
-  } catch (error) {
-    logger.error(`Reader summarize failed: ${(error as Error).message}`, { module: 'Reader' });
-    res.status(500).json({ success: false, error: (error as Error).message });
-  }
-});
-
 router.delete('/runtime-data', async (_req, res) => {
   try {
     await clearReaderData(await getReaderDir());
@@ -192,19 +177,6 @@ router.post('/articles/:id/save', async (req, res) => {
     res.json({ success: true, data: article });
   } catch (error) {
     logger.error(`Reader save article failed: ${(error as Error).message}`, { module: 'Reader' });
-    res.status(500).json({ success: false, error: (error as Error).message });
-  }
-});
-
-router.post('/articles/:id/translate', async (req, res) => {
-  try {
-    const article = await translateReaderArticle(await getReaderDir(), req.params.id);
-    if (!article) {
-      return res.status(404).json({ success: false, error: '资讯不存在' });
-    }
-    res.json({ success: true, data: article });
-  } catch (error) {
-    logger.error(`Reader translate failed: ${(error as Error).message}`, { module: 'Reader' });
     res.status(500).json({ success: false, error: (error as Error).message });
   }
 });

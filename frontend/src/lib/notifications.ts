@@ -104,33 +104,9 @@ export function subscribeSystemNotifications(handlers: {
   onChange?: (event: NotificationChangeEvent) => void
   onError?: (error: Event) => void
 }): () => void {
-  const source = new EventSource(withBasePath('/api/system/notifications/stream'))
-
-  source.addEventListener('snapshot', (event) => {
-    try {
-      const payload = JSON.parse((event as MessageEvent).data) as NotificationSnapshotEvent
-      handlers.onSnapshot?.(payload)
-    } catch {
-      // ignore malformed payload
-    }
-  })
-
-  source.addEventListener('change', (event) => {
-    try {
-      const payload = JSON.parse((event as MessageEvent).data) as NotificationChangeEvent
-      handlers.onChange?.(payload)
-    } catch {
-      // ignore malformed payload
-    }
-  })
-
-  source.addEventListener('error', (event) => {
-    handlers.onError?.(event)
-  })
-
-  return () => {
-    source.close()
-  }
+  void handlers
+  // EventSource cannot attach the ClawOS Basic Auth header, so polling is the stable path.
+  return () => {}
 }
 
 export async function notify(input: CreateSystemNotificationInput): Promise<SystemNotification> {

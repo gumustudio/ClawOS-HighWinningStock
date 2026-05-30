@@ -105,10 +105,6 @@ test('reader routes expose overview and pull rss feeds only', async () => {
     assert.equal(rssArticlesResponse.body.success, true);
     assert.equal(rssArticlesResponse.body.data.every((article: { sourceType: string }) => article.sourceType === 'rss'), true);
 
-    const openClawArticlesResponse = await request(app).get('/api/system/reader/articles?source=openclaw');
-    assert.equal(openClawArticlesResponse.status, 400);
-    assert.equal(openClawArticlesResponse.body.success, false);
-
     const articleId = articlesResponse.body.data[0].id as string;
     const saveResponse = await request(app).post(`/api/system/reader/articles/${articleId}/save`).send({ saved: true });
     assert.equal(saveResponse.status, 200);

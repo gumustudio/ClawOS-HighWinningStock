@@ -35,8 +35,6 @@ let inFlightRequests = 0;
 const eventLoopDelay = monitorEventLoopDelay({ resolution: 20 });
 eventLoopDelay.enable();
 let performanceLogRotationPromise: Promise<void> | null = null;
-const OPENCLAW_TARGET = 'http://127.0.0.1:18789';
-const OPENCLAW_WS_TARGET = 'ws://127.0.0.1:18789';
 const OPENCODE_WS_TARGET = 'ws://127.0.0.1:4096';
 const FILEBROWSER_TARGET = 'http://127.0.0.1:18790';
 const FILEBROWSER_BASE_PATH = '/proxy/filebrowser';
@@ -45,8 +43,6 @@ const FILEBROWSER_AUTH_COOKIE = 'clawos_filebrowser_auth';
 const MEDIA_AUTH_COOKIE = 'clawos_media_auth';
 const QUARK_AUTH_TARGET = 'https://pan.quark.cn';
 const QUARK_UOP_TARGET = 'https://uop.quark.cn';
-const OPENCLAW_TRUSTED_PROXY_USER = 'clawos';
-
 function appendPerformanceLog(line: string): void {
   void fs.promises.mkdir(path.dirname(PERFORMANCE_LOG_PATH), { recursive: true })
     .then(async () => {
@@ -122,24 +118,6 @@ function startPerformanceHeartbeat(): void {
     eventLoopDelay.reset();
   }, 5000).unref();
 }
-
-function resolveOpenClawGatewayToken(): string {
-  const envToken = process.env.OPENCLAW_GATEWAY_TOKEN?.trim();
-  if (envToken) {
-    return envToken;
-  }
-
-  const homeDir = process.env.HOME?.trim() || os.homedir();
-  const openClawEnvPath = path.join(homeDir, '.openclaw', '.env');
-  try {
-    const parsedEnv = dotenv.parse(fs.readFileSync(openClawEnvPath, 'utf8'));
-    return parsedEnv.OPENCLAW_GATEWAY_TOKEN?.trim() ?? '';
-  } catch {
-    return '';
-  }
-}
-
-const OPENCLAW_GATEWAY_TOKEN = resolveOpenClawGatewayToken();
 
 function resolveClawosPassword(): string {
   const envPassword = process.env.CLAWOS_PASSWORD?.trim();
@@ -335,8 +313,10 @@ function getOpenCodeProxyBasePath(requestPath: string): string {
 function injectOpenCodeRequestRewrite(html: string, requestPath: string): string {
   const proxyPrefix = getOpenCodeProxyBasePath(requestPath);
   const marker = '</head>';
-  const rewriteScript = `<script>(function(){const prefix='${proxyPrefix}';const rewriteUrl=(input)=>{if(typeof input!=='string'){return input;}if(!input.startsWith('/')||input.startsWith(prefix+'/')){return input;}if(input.startsWith('/proxy/')||input.startsWith('/clawos/')){return input;}return prefix+input;};const originalFetch=window.fetch.bind(window);window.fetch=(input,init)=>{if(typeof input==='string'){return originalFetch(rewriteUrl(input),init);}if(input instanceof Request){return originalFetch(new Request(rewriteUrl(input.url.replace(location.origin,'')),input),init);}return originalFetch(input,init);};const originalOpen=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(method,url,async,username,password){return originalOpen.call(this,method,rewriteUrl(url),async,username,password);};const OriginalEventSource=window.EventSource;window.EventSource=function(url,config){return new OriginalEventSource(rewriteUrl(url),config);};window.EventSource.prototype=OriginalEventSource.prototype;const OriginalWebSocket=window.WebSocket;window.WebSocket=function(url,protocols){if(typeof url==='string'){if(url.startsWith('ws://')||url.startsWith('wss://')){const parsed=new URL(url);url=(location.protocol==='https:'?'wss://':'ws://')+location.host+rewriteUrl(parsed.pathname+parsed.search);}else{url=(location.protocol==='https:'?'wss://':'ws://')+location.host+rewriteUrl(url);}}return protocols?new OriginalWebSocket(url,protocols):new OriginalWebSocket(url);};window.WebSocket.prototype=OriginalWebSocket.prototype;})();</script>`;
+  const rewriteScript = `<script>(function(){const prefix='${proxyPrefix}';const rewriteUrl=(input)=>{if(typeof input!=='string'){return input;}if(input.startsWith(location.origin+'/assets/')){return location.origin+prefix+input.slice(location.origin.length);}if(input.startsWith('/assets/')){return prefix+input;}if(!input.startsWith('/')||input.startsWith(prefix+'/')){return input;}if(input.startsWith('/proxy/')||input.startsWith('/clawos/')){return input;}return prefix+input;};const originalFetch=window.fetch.bind(window);window.fetch=(input,init)=>{if(typeof input==='string'){return originalFetch(rewriteUrl(input),init);}if(input instanceof Request){return originalFetch(new Request(rewriteUrl(input.url.replace(location.origin,'')),input),init);}return originalFetch(input,init);};const originalOpen=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(method,url,async,username,password){return originalOpen.call(this,method,rewriteUrl(url),async,username,password);};const OriginalEventSource=window.EventSource;window.EventSource=function(url,config){return new OriginalEventSource(rewriteUrl(url),config);};window.EventSource.prototype=OriginalEventSource.prototype;const OriginalWebSocket=window.WebSocket;window.WebSocket=function(url,protocols){if(typeof url==='string'){if(url.startsWith('ws://')||url.startsWith('wss://')){const parsed=new URL(url);url=(location.protocol==='https:'?'wss://':'ws://')+location.host+rewriteUrl(parsed.pathname+parsed.search);}else{url=(location.protocol==='https:'?'wss://':'ws://')+location.host+rewriteUrl(url);}}return protocols?new OriginalWebSocket(url,protocols):new OriginalWebSocket(url);};window.WebSocket.prototype=OriginalWebSocket.prototype;})();</script>`;
   const rewrittenHtml = html
+    .replace(/(href|src|content)="\.\/assets\//g, `$1="${proxyPrefix}/assets/`)
+    .replace(/(href|src|content)='\.\/assets\//g, `$1='${proxyPrefix}/assets/`)
     .replace(/(href|src|content)="\/(?!\/|proxy\/|clawos\/)([^"]*)"/g, `$1="${proxyPrefix}/$2"`)
     .replace(/(href|src|content)='\/(?!\/|proxy\/|clawos\/)([^']*)'/g, `$1='${proxyPrefix}/$2'`);
 
@@ -345,7 +325,9 @@ function injectOpenCodeRequestRewrite(html: string, requestPath: string): string
 
 function rewriteOpenCodeScriptPaths(source: string, requestPath: string): string {
   const proxyPrefix = getOpenCodeProxyBasePath(requestPath);
-  return source.replace(/(["'`])\/assets\//g, `$1${proxyPrefix}/assets/`);
+  return source
+    .replace(/(["'`])\/assets\//g, `$1${proxyPrefix}/assets/`)
+    .replace(/(["'`])assets\//g, `$1${proxyPrefix}/assets/`);
 }
 
 function getRemoteAddress(req: { headers?: Record<string, string | string[] | undefined>; socket?: { remoteAddress?: string | undefined } }): string {
@@ -417,26 +399,6 @@ setInterval(() => {
     }
   }
 }, LOGIN_CLEANUP_INTERVAL_MS);
-
-function setTrustedProxyIdentityHeaders(headers: {
-  setHeader(name: string, value: string): void;
-  getHeader?(name: string): string | string[] | number | undefined;
-}, req: { headers?: Record<string, string | string[] | undefined> }) {
-  const forwardedProtoHeader = req.headers?.['x-forwarded-proto'];
-  const forwardedHostHeader = req.headers?.['x-forwarded-host'];
-  const hostHeader = req.headers?.host;
-
-  const forwardedProto = Array.isArray(forwardedProtoHeader)
-    ? forwardedProtoHeader[0]
-    : forwardedProtoHeader ?? 'http';
-  const forwardedHost = Array.isArray(forwardedHostHeader)
-    ? forwardedHostHeader[0]
-    : forwardedHostHeader ?? (Array.isArray(hostHeader) ? hostHeader[0] : hostHeader ?? '127.0.0.1:3001');
-
-  headers.setHeader('x-forwarded-user', OPENCLAW_TRUSTED_PROXY_USER);
-  headers.setHeader('x-forwarded-proto', forwardedProto);
-  headers.setHeader('x-forwarded-host', forwardedHost);
-}
 
 function stripFrameProtectionHeaders(proxyRes: { headers: Record<string, string | string[] | undefined> }) {
   delete proxyRes.headers['x-frame-options'];
@@ -594,42 +556,6 @@ app.post('/api/system/auth/verify', express.json(), (req, res) => {
     res.status(401).json({ success: false, error: 'Invalid password' });
   }
 });
-
-// --- Proxy for OpenClaw (NO authentication required - OpenClaw has its own token auth) ---
-// Must be before authMiddleware so iframe can load without Basic Auth header
-const openclawProxy = createProxyMiddleware({
-  target: OPENCLAW_TARGET,
-  changeOrigin: true,
-  xfwd: true,
-  ws: false,
-  selfHandleResponse: true,
-  pathRewrite: (requestPath) => rewriteProxyPrefix(rewriteProxyPrefix(requestPath, '/clawos/proxy/openclaw'), '/proxy/openclaw'),
-  on: {
-    proxyReq: (proxyReq, req) => {
-      setTrustedProxyIdentityHeaders(proxyReq, req);
-    },
-    proxyRes: responseInterceptor(async (responseBuffer, proxyRes, _req, res) => {
-      stripFrameProtectionHeaders(proxyRes as { headers: Record<string, string | string[] | undefined> });
-
-      res.removeHeader('x-frame-options');
-      res.removeHeader('X-Frame-Options');
-      res.setHeader(
-        'content-security-policy',
-        "default-src 'self'; base-uri 'none'; object-src 'none'; script-src 'self' 'unsafe-inline' 'sha256-RxCZFmTWY/yQmhYxMDn+blaCuwLzOsV/XsVb0n5EkRU='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: https:; font-src 'self' https://fonts.gstatic.com; connect-src 'self' ws: wss:",
-      );
-
-      const contentType = String(proxyRes.headers['content-type'] ?? '');
-      if (!contentType.includes('text/html')) {
-        return responseBuffer;
-      }
-
-      return responseBuffer;
-    })
-  }
-});
-
-app.use('/proxy/openclaw', openclawProxy);
-app.use('/clawos/proxy/openclaw', openclawProxy);
 
 const opencodeAssetRewriteProxy = createProxyMiddleware({
   target: OPENCODE_WEB_TARGET,
@@ -844,13 +770,6 @@ app.use('/clawos/proxy/quark-auth', quarkAuthProxy);
 app.use('/proxy/quark-auth-uop', quarkUopProxy);
 app.use('/clawos/proxy/quark-auth-uop', quarkUopProxy);
 
-const openclawWebSocketProxy = httpProxy.createProxyServer({
-  target: OPENCLAW_WS_TARGET,
-  changeOrigin: true,
-  xfwd: true,
-  ws: true,
-});
-
 const opencodeWebSocketProxy = httpProxy.createProxyServer({
   target: OPENCODE_WS_TARGET,
   changeOrigin: true,
@@ -869,45 +788,7 @@ opencodeWebSocketProxy.on('error', (error, req, socket) => {
   }
 });
 
-openclawWebSocketProxy.on('proxyReqWs', (proxyReq, req) => {
-  setTrustedProxyIdentityHeaders(proxyReq, req);
-  logger.info(
-    `OpenClaw WebSocket proxying ${req.url ?? '/'} from ${getRemoteAddress(req)} to ${OPENCLAW_WS_TARGET}`,
-    { module: 'Proxy' },
-  );
-
-  if (proxyReq.path) {
-    logger.info(`OpenClaw WebSocket upstream path ${proxyReq.path}`, { module: 'Proxy' });
-  }
-});
-
-openclawWebSocketProxy.on('error', (error, req, socket) => {
-  const requestPath = req?.url ?? '/';
-  logger.error(`OpenClaw WebSocket proxy error on ${requestPath}: ${error.message}`, { module: 'Proxy' });
-  if (socket && 'destroy' in socket) {
-    socket.destroy();
-  }
-});
-
 app.use(express.json());
-
-app.get('/api/system/openclaw/bootstrap', (_req, res) => {
-  res.json({
-    success: true,
-    data: {
-      token: OPENCLAW_GATEWAY_TOKEN,
-    },
-  });
-});
-
-app.get('/clawos/api/system/openclaw/bootstrap', (_req, res) => {
-  res.json({
-    success: true,
-    data: {
-      token: OPENCLAW_GATEWAY_TOKEN,
-    },
-  });
-});
 
 app.post('/api/system/netdisk/quark-auth/reset', async (_req, res) => {
   await clearQuarkAuthSession();
@@ -990,23 +871,7 @@ server.on('connection', (socket) => {
 // Handle WebSocket upgrades for proxies
 server.on('upgrade', (req, socket, head) => {
   upgradedSockets.add(socket as Socket);
-  if (req.url && req.url.startsWith('/proxy/openclaw')) {
-    const originalUrl = req.url;
-    req.url = rewriteProxyPrefix(req.url, '/proxy/openclaw');
-    logger.info(
-      `Accepted WebSocket upgrade ${originalUrl} -> ${req.url} from ${getRemoteAddress(req)}`,
-      { module: 'Proxy' },
-    );
-    openclawWebSocketProxy.ws(req, socket as any, head);
-  } else if (req.url && req.url.startsWith('/clawos/proxy/openclaw')) {
-    const originalUrl = req.url;
-    req.url = rewriteProxyPrefix(req.url, '/clawos/proxy/openclaw');
-    logger.info(
-      `Accepted ClawOS OpenClaw WebSocket upgrade ${originalUrl} -> ${req.url} from ${getRemoteAddress(req)}`,
-      { module: 'Proxy' },
-    );
-    openclawWebSocketProxy.ws(req, socket as any, head);
-  } else if (req.url && req.url.startsWith('/proxy/opencode')) {
+  if (req.url && req.url.startsWith('/proxy/opencode')) {
     if (!hasOpenCodeAppAccess(req.headers.cookie)) {
       logger.warn(`Rejected locked OpenCode WebSocket upgrade from ${getRemoteAddress(req)}`, { module: 'Proxy' });
       socket.destroy();
@@ -1042,7 +907,6 @@ function shutdownServer(signal: string) {
   isShuttingDown = true;
   logger.warn(`Received ${signal}, shutting down ClawOS backend`, { module: 'Server' });
 
-  openclawWebSocketProxy.close();
   opencodeWebSocketProxy.close();
   server.close((error) => {
     if (error) {

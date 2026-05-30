@@ -54,18 +54,6 @@ interface BackupStatus {
   message?: string
 }
 
-interface OpenClawBackupStatus {
-  rootDirectory: string
-  indexFile: string
-  hasIndexFile: boolean
-  latestIndexedVersion: string | null
-  latestIndexedStamp: string | null
-  syncStatus: 'ok' | 'warning' | 'missing-index'
-  syncMessage: string
-  versions: BackupStatus
-  zips: BackupStatus
-}
-
 interface SecuritySurfaceStatus {
   summary: {
     level: 'ok' | 'warning'
@@ -95,30 +83,26 @@ export default function ServiceMonitor() {
   const [security, setSecurity] = useState<SecuritySurfaceStatus | null>(null)
   const [restic, setRestic] = useState<ResticBackupStatus | null>(null)
   const [timeshift, setTimeshift] = useState<TimeshiftStatus | null>(null)
-  const [openClawBackup, setOpenClawBackup] = useState<OpenClawBackupStatus | null>(null)
   const [loading, setLoading] = useState(true)
 
   const fetchData = async () => {
       try {
-        const [svcRes, securityRes, resticRes, tsRes, openClawBackupRes] = await Promise.all([
+        const [svcRes, securityRes, resticRes, tsRes] = await Promise.all([
         fetch(withBasePath('/api/system/services')),
         fetch(withBasePath('/api/system/security-surface')),
         fetch(withBasePath('/api/system/restic-backup')),
         fetch(withBasePath('/api/system/timeshift')),
-        fetch(withBasePath('/api/system/openclaw-backup'))
       ])
-      
+
       const svcJson = await svcRes.json()
       const securityJson = await securityRes.json()
       const resticJson = await resticRes.json()
       const tsJson = await tsRes.json()
-      const openClawBackupJson = await openClawBackupRes.json()
 
       if (svcJson.success) setServices(svcJson.data)
       if (securityJson.success) setSecurity(securityJson.data)
       if (resticJson.success) setRestic(resticJson.data)
       if (tsJson.success) setTimeshift(tsJson.data)
-      if (openClawBackupJson.success) setOpenClawBackup(openClawBackupJson.data)
       
     } catch (error) {
       console.error('Failed to fetch monitor data', error)
@@ -246,85 +230,6 @@ export default function ServiceMonitor() {
             <div className="text-slate-500 text-sm">{backup?.message || '暂无备份记录'}</div>
           )}
         </div>
-      </div>
-    )
-  }
-
-  const renderOpenClawBackupCard = (backup: OpenClawBackupStatus | null) => {
-    const getSyncMeta = () => {
-      if (!backup) {
-        return { className: 'border-slate-200 bg-white/40 text-slate-500' }
-      }
-
-      return { className: getBackupObservationClassName(backup.syncStatus) }
-    }
-
-    const renderBackupRow = (label: string, data: BackupStatus) => {
-      if (data.error) {
-        return (
-          <div className="rounded-xl border border-red-100 bg-red-50 px-3 py-3">
-            <div className="text-sm font-semibold text-slate-800">{label}</div>
-            <div className="mt-1 text-xs text-red-600">{data.error}</div>
-            <div className="mt-1 text-[11px] text-slate-400 break-all">{data.directory}</div>
-          </div>
-        )
-      }
-
-      if (!data.latest) {
-        return (
-          <div className="rounded-xl border border-slate-200 bg-white/50 px-3 py-3">
-            <div className="text-sm font-semibold text-slate-800">{label}</div>
-            <div className="mt-1 text-xs text-slate-500">{data.message || '暂无备份记录'}</div>
-            <div className="mt-1 text-[11px] text-slate-400 break-all">{data.directory}</div>
-          </div>
-        )
-      }
-
-      return (
-        <div className="rounded-xl border border-slate-200 bg-white/50 px-3 py-3">
-          <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0">
-              <div className="text-sm font-semibold text-slate-800">{label}</div>
-              <div className="mt-1 text-sm text-slate-700 break-all">{data.latestName || data.latest}</div>
-            </div>
-            <div className="shrink-0 rounded-full bg-cyan-50 px-2 py-1 text-[10px] font-semibold text-cyan-700">
-              {data.count} 份
-            </div>
-          </div>
-          <div className="mt-2 text-xs text-slate-500">{formatBackupTimestamp(data.timestamp)}</div>
-          <div className="mt-1 text-[11px] text-slate-400 break-all">{data.directory}</div>
-        </div>
-      )
-    }
-
-    return (
-      <div className="break-inside-avoid mb-4 bg-white/50 backdrop-blur-md rounded-2xl p-4 border border-white/40 shadow-sm">
-        <div className="flex items-center text-slate-700 mb-3">
-          <ShieldCheckIcon className="w-5 h-5 mr-2 text-cyan-500" />
-          <h3 className="font-semibold text-lg">应用级备份</h3>
-        </div>
-
-        {!backup ? (
-          <div className="flex flex-col items-center justify-center min-h-32 bg-white/40 rounded-xl border border-white/20 px-4 text-center text-slate-500 text-sm">
-            暂无备份信息
-          </div>
-        ) : (
-          <div className="space-y-3">
-              <div className={`rounded-xl px-3 py-2 text-[11px] ${getSyncMeta().className}`}>
-                <div className="font-semibold">同步状态：{backup.syncMessage}</div>
-              </div>
-              <div className="rounded-xl border border-white/20 bg-white/40 px-3 py-2 text-[11px] text-slate-500">
-                <div className="font-semibold text-slate-700">ClawBackUp / OpenClaw 工作区备份</div>
-                <div>根目录：<span className="break-all">{backup.rootDirectory}</span></div>
-                <div className="mt-1">版本索引：{backup.hasIndexFile ? '已找到 VERSIONS.md' : '未找到 VERSIONS.md'}</div>
-                {backup.latestIndexedVersion && backup.latestIndexedStamp && (
-                <div className="mt-1">索引最新版本：{backup.latestIndexedVersion}-{backup.latestIndexedStamp}</div>
-              )}
-            </div>
-            {renderBackupRow('目录版本备份', backup.versions)}
-            {renderBackupRow('Zip 压缩备份', backup.zips)}
-          </div>
-        )}
       </div>
     )
   }
@@ -557,7 +462,6 @@ export default function ServiceMonitor() {
         {renderSecurityCard(security)}
         {renderResticBackupCard(restic)}
         {renderBackupCard({ title: '系统级备份', accentClassName: 'text-teal-500', backup: timeshift })}
-        {renderOpenClawBackupCard(openClawBackup)}
 
       </div>
     </div>
