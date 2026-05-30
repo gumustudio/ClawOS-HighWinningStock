@@ -11,7 +11,7 @@
 [![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)](https://react.dev/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.9-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 
-ClawOS is a self-hosted, single-user Web desktop that brings AI stock analysis, OpenCode remote coding, OpenClaw chat, files, notes, music, video, downloads, RSS daily briefs, and system monitoring into one browser workspace.
+ClawOS is a self-hosted, single-user Web desktop that brings AI stock analysis, OpenCode remote coding, files, notes, music, video, downloads, RSS daily briefs, and system monitoring into one browser workspace.
 
 **[> 中文文档 / Chinese Docs](README.md)**
 
@@ -47,8 +47,7 @@ The current public version focuses on:
 | **Desktop Shell** | Top status bar, top mini dock, window management, wallpapers, notification center, widgets, and service state. |
 | **AI Stock Analysis** | Data collection, market regime, candidate signals, triple-stream scoring, LLM expert voting, Conviction Filter, position risk, trade logs, and memory replay. |
 | **OpenCode** | Local OpenCode Web embedded through `/proxy/opencode`; the backend injects Basic Auth and the frontend only receives a locked access cookie. |
-| **OpenClaw** | Local OpenClaw Gateway embedded by iframe proxy without modifying the upstream gateway. |
-| **Reader** | RSS feed pulling, deduplication, categorization, daily briefs, read-later, AI summary, and AI translation. |
+| **Reader** | RSS feed pulling, deduplication, categorization, daily briefs, and read-later. |
 | **Notes** | Local Markdown files, folders, rich-text editing, image drops, and task lists. |
 | **Dida Lite** | Dida365 OAuth, inbox widget, natural-language quick task creation, task management, and calendar view. |
 | **Music & Video** | Local music library, NetEase streaming, lyrics, video search, and HLS playback. |
@@ -93,7 +92,6 @@ ClawOS Backend (:3001)
   ├── Static React SPA
   ├── REST API (/api/system/*)
   ├── OpenCode reverse proxy (:4096, 127.0.0.1 only)
-  ├── OpenClaw reverse proxy (:18789)
   ├── FileBrowser reverse proxy (:18790)
   ├── Aria2 RPC (:6800)
   └── AList proxy (:5244)
@@ -105,7 +103,7 @@ ClawOS Backend (:3001)
 | **Backend** | Node.js + Express 5 + TypeScript + Winston logging |
 | **AI Data** | Node/TypeScript main service + controlled Python/AKShare subprocesses for A-share data |
 | **Editor** | Tiptap rich-text editor with Markdown files on disk |
-| **Integrations** | OpenCode, OpenClaw, FileBrowser, AList, Aria2, NetEase Music API |
+| **Integrations** | OpenCode, FileBrowser, AList, Aria2, NetEase Music API |
 
 ## Quick Start
 
@@ -114,7 +112,7 @@ ClawOS Backend (:3001)
 - Linux, Ubuntu 24.04+ recommended.
 - Node.js 20+.
 - Python 3 for AKShare-backed AI stock data collection.
-- Optional: Tailscale, OpenCode CLI, OpenClaw, Aria2, AList, FileBrowser.
+- Optional: Tailscale, OpenCode CLI, Aria2, AList, FileBrowser.
 
 ### 1. Clone and Install
 
@@ -162,7 +160,6 @@ systemctl --user restart clawos.service
 |---|---|
 | `CLAWOS_PASSWORD` | ClawOS login password. Username is always `clawos`. |
 | `PORT` | Backend port. Default: `3001`. |
-| `OPENCLAW_GATEWAY_TOKEN` | OpenClaw Gateway auth token. |
 | `OPENCODE_SERVER_PASSWORD` | OpenCode Web Basic Auth password. Read by the backend only. |
 | `CLAWOS_OPENCODE_APP_PASSWORD` | Internal ClawOS OpenCode app-lock password. Can differ from the OpenCode service password. |
 | `DIDA_CLIENT_ID` / `DIDA_CLIENT_SECRET` | Dida365 OAuth credentials. |
@@ -194,7 +191,7 @@ All working directories are configurable in Settings or `~/.clawos/config.json`:
 - OpenCode Web listens on `127.0.0.1:4096` and is accessed through the ClawOS backend proxy.
 - `/proxy/opencode` requires the ClawOS OpenCode app-lock cookie; the backend injects OpenCode Basic Auth.
 - FileBrowser and local media streams use separate HttpOnly cookies because browser media tags cannot send Basic Auth headers.
-- Reader is RSS-only and no longer accepts OpenClaw local inbox imports.
+- Reader is RSS-only.
 
 ## External Services
 
@@ -203,7 +200,6 @@ All external services are optional. If a service is missing, its app shows an un
 | Service | Default Port | Purpose |
 |---|---:|---|
 | OpenCode Web | `4096` | Remote coding frontend, loopback-only. |
-| OpenClaw Gateway | `18789` | AI chat gateway. |
 | FileBrowser | `18790` | Local file UI. |
 | Aria2 | `6800` | Download engine RPC. |
 | AList | `5244` | Baidu/Quark cloud-drive mounting. |
@@ -237,13 +233,13 @@ ClawOS/
 
 ## FAQ
 
-**Can I use it without Aria2, AList, OpenClaw, or OpenCode?**
+**Can I use it without Aria2, AList, or OpenCode?**
 
 Yes. They are optional integrations. Their apps will show unavailable or require configuration, while the desktop, settings, Reader, Notes, and other core features continue to work.
 
 **How should I access it remotely?**
 
-Use Tailscale or WireGuard. Do not expose `3001`, `4096`, or `18789` directly to the public Internet.
+Use Tailscale or WireGuard. Do not expose `3001` or `4096` directly to the public Internet.
 
 **How do I update?**
 
