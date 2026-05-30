@@ -2,7 +2,7 @@ import { useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { X } from 'lucide-react'
 import { useNotificationStore, type Notification } from '../store/useNotificationStore'
-import { DashboardIcon, MonitorIcon, FilesIcon, VideoIcon, LocalMusicIcon, DownloadsIcon, NotesIcon, ReaderIcon, QuarkIcon, NeteaseIcon, OpenClawIcon, OpenCodeIcon, DidaIcon } from './Icons'
+import { DashboardIcon, MonitorIcon, FilesIcon, VideoIcon, LocalMusicIcon, DownloadsIcon, NotesIcon, ReaderIcon, QuarkIcon, NeteaseIcon, OpenCodeIcon, DidaIcon } from './Icons'
 import AIQuantIcon from './AIQuantIcon'
 
 function isCriticalNotification(notification: Notification) {
@@ -13,7 +13,6 @@ const APP_ICONS: Record<string, React.ElementType> = {
   aiquant: AIQuantIcon,
   dashboard: DashboardIcon,
   monitor: MonitorIcon,
-  openclaw: OpenClawIcon,
   opencode: OpenCodeIcon,
   files: FilesIcon,
   video: VideoIcon,
@@ -42,7 +41,7 @@ const ToastItem = ({ notification }: { notification: Notification }) => {
     return () => clearTimeout(timer)
   }, [notification.id, dismissToast, behavior.stickyToasts, behavior.autoDismissMs, isCritical])
 
-  const AppIcon = APP_ICONS[notification.appId] || OpenClawIcon
+  const AppIcon = APP_ICONS[notification.appId] || OpenCodeIcon
 
   const handleClick = () => {
     void markAsRead(notification.id)
@@ -51,7 +50,6 @@ const ToastItem = ({ notification }: { notification: Notification }) => {
 
   return (
     <motion.div
-      layout
       initial={{ opacity: 0, x: 50, scale: 0.95 }}
       animate={{ opacity: 1, x: 0, scale: 1 }}
       exit={{ opacity: 0, x: 50, scale: 0.95 }}
@@ -80,7 +78,7 @@ const ToastItem = ({ notification }: { notification: Notification }) => {
           e.stopPropagation()
           dismissToast(notification.id)
         }}
-        className={`absolute top-2 right-2 p-1 rounded-lg opacity-0 group-hover:opacity-100 transition-all ${isCritical ? 'text-red-400 hover:text-red-700 hover:bg-red-100/80' : 'text-slate-400 hover:text-slate-600 hover:bg-slate-200/50'}`}
+        className={`absolute top-2 right-2 p-1 rounded-lg opacity-0 group-hover:opacity-100 transition-[opacity,background-color,color] ${isCritical ? 'text-red-400 hover:text-red-700 hover:bg-red-100/80' : 'text-slate-400 hover:text-slate-600 hover:bg-slate-200/50'}`}
       >
         <X size={14} />
       </button>

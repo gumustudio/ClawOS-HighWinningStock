@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   ArrowDownTrayIcon,
   MusicalNoteIcon,
@@ -106,6 +106,9 @@ export default function DesktopWidgets({ onOpenDownloads, onOpenDida, authReady 
   const [didaDraft, setDidaDraft] = useState('')
   const [didaSubmitting, setDidaSubmitting] = useState(false)
   const [didaTogglingIds, setDidaTogglingIds] = useState<string[]>([])
+  const statsRequestRunningRef = useRef(false)
+  const downloadsRequestRunningRef = useRef(false)
+  const didaRequestRunningRef = useRef(false)
 
   useEffect(() => {
     if (!authReady) {
@@ -113,6 +116,10 @@ export default function DesktopWidgets({ onOpenDownloads, onOpenDida, authReady 
     }
 
     const fetchHwNet = async () => {
+      if (statsRequestRunningRef.current) {
+        return
+      }
+      statsRequestRunningRef.current = true
       try {
         const [hwRes, netRes] = await Promise.all([
           fetch(withBasePath('/api/system/hardware')),
@@ -122,10 +129,17 @@ export default function DesktopWidgets({ onOpenDownloads, onOpenDida, authReady 
         const netJson = await netRes.json()
         if (hwJson.success) setHwStats(hwJson.data)
         if (netJson.success) setNetStats(netJson.data)
-      } catch {}
+      } catch {
+      } finally {
+        statsRequestRunningRef.current = false
+      }
     }
 
     const fetchDownloads = async () => {
+      if (downloadsRequestRunningRef.current) {
+        return
+      }
+      downloadsRequestRunningRef.current = true
       try {
         const res = await fetch(withBasePath('/api/system/downloads/tasks'))
         const json = (await res.json()) as { success?: boolean; data?: DownloadWidgetResponse }
@@ -139,6 +153,8 @@ export default function DesktopWidgets({ onOpenDownloads, onOpenDida, authReady 
         setDownloadAvailable(false)
         setDownloadCounts(createEmptyDownloadCounts())
         setDownloads([])
+      } finally {
+        downloadsRequestRunningRef.current = false
       }
     }
 
@@ -174,6 +190,10 @@ export default function DesktopWidgets({ onOpenDownloads, onOpenDida, authReady 
     }
 
     const fetchDida = async () => {
+      if (didaRequestRunningRef.current) {
+        return
+      }
+      didaRequestRunningRef.current = true
       try {
         const status = await didaApi.getStatus()
         if (!status.success || !status.connected) {
@@ -194,6 +214,8 @@ export default function DesktopWidgets({ onOpenDownloads, onOpenDida, authReady 
         setDidaError('滴答同步失败')
         setDidaProjects([])
         setDidaTasks([])
+      } finally {
+        didaRequestRunningRef.current = false
       }
     }
 
@@ -206,7 +228,7 @@ export default function DesktopWidgets({ onOpenDownloads, onOpenDida, authReady 
       void fetchHwNet()
       void fetchDownloads()
       setTime(new Date())
-    }, 2000)
+    }, 6000)
 
     const didaInterval = setInterval(() => {
       void fetchDida()
@@ -463,7 +485,7 @@ export default function DesktopWidgets({ onOpenDownloads, onOpenDida, authReady 
                     <span className="flex-shrink-0">{hwStats ? `${hwStats.cpu.usage}%` : '--'}</span>
                   </div>
                   <div className="w-full h-1.5 bg-slate-200/50 rounded-full overflow-hidden">
-                    <div className="bg-blue-500 h-full rounded-full transition-all duration-1000" style={{ width: hwStats ? `${parseFloat(hwStats.cpu.usage)}%` : '0%' }} />
+                    <div className="bg-blue-500 h-full rounded-full transition-[width] duration-1000" style={{ width: hwStats ? `${parseFloat(hwStats.cpu.usage)}%` : '0%' }} />
                   </div>
                 </div>
                 <div>
@@ -472,7 +494,7 @@ export default function DesktopWidgets({ onOpenDownloads, onOpenDida, authReady 
                     <span className="flex-shrink-0">{hwStats ? `${hwStats.memory.usagePercent}%` : '--'}</span>
                   </div>
                   <div className="w-full h-1.5 bg-slate-200/50 rounded-full overflow-hidden">
-                    <div className="bg-purple-500 h-full rounded-full transition-all duration-1000" style={{ width: hwStats ? `${parseFloat(hwStats.memory.usagePercent)}%` : '0%' }} />
+                    <div className="bg-purple-500 h-full rounded-full transition-[width] duration-1000" style={{ width: hwStats ? `${parseFloat(hwStats.memory.usagePercent)}%` : '0%' }} />
                   </div>
                 </div>
                 <div>
@@ -481,7 +503,7 @@ export default function DesktopWidgets({ onOpenDownloads, onOpenDida, authReady 
                     <span className="flex-shrink-0">{hwStats ? `${hwStats.disk.usagePercent}%` : '--'}</span>
                   </div>
                   <div className="w-full h-1.5 bg-slate-200/50 rounded-full overflow-hidden">
-                    <div className="bg-emerald-500 h-full rounded-full transition-all duration-1000" style={{ width: hwStats ? `${parseFloat(hwStats.disk.usagePercent)}%` : '0%' }} />
+                    <div className="bg-emerald-500 h-full rounded-full transition-[width] duration-1000" style={{ width: hwStats ? `${parseFloat(hwStats.disk.usagePercent)}%` : '0%' }} />
                   </div>
                 </div>
               </div>
@@ -498,7 +520,7 @@ export default function DesktopWidgets({ onOpenDownloads, onOpenDida, authReady 
         <button
           type="button"
           onClick={onOpenDownloads}
-          className="h-full bg-white/40 backdrop-blur-xl border border-white/40 shadow-lg rounded-2xl p-4 text-slate-800 flex flex-col text-left transition-all hover:bg-white/50 hover:shadow-xl active:scale-[0.995]"
+          className="h-full bg-white/40 backdrop-blur-xl border border-white/40 shadow-lg rounded-2xl p-4 text-slate-800 flex flex-col text-left transition-[background-color,box-shadow,transform] hover:bg-white/50 hover:shadow-xl active:scale-[0.995]"
         >
           <div className="flex items-center justify-between gap-3 mb-3">
             <div className="flex items-center space-x-2 min-w-0">
@@ -537,7 +559,7 @@ export default function DesktopWidgets({ onOpenDownloads, onOpenDida, authReady 
                       <div className="mb-1 truncate text-[10px] text-red-600 font-medium" title={statusSummary}>{statusSummary}</div>
                     ) : null}
                     <div className="w-full h-1 bg-slate-200/50 rounded-full overflow-hidden mb-1">
-                      <div className="bg-sky-500 h-full rounded-full transition-all duration-500" style={{ width: `${percent}%` }} />
+                      <div className="bg-sky-500 h-full rounded-full transition-[width] duration-500" style={{ width: `${percent}%` }} />
                     </div>
                     <div className="flex justify-between text-[9px] text-slate-500 font-mono">
                       <span>{task.status === 'active' ? formatSpeed(speed) : statusSummary}</span>
@@ -581,7 +603,7 @@ export default function DesktopWidgets({ onOpenDownloads, onOpenDida, authReady 
                   <p className="text-[10px] text-blue-600 font-medium truncate drop-shadow-sm h-4">{musicState.lyric || (musicState.playing ? '♪ 享受音乐中...' : '')}</p>
                   <div className="flex items-center space-x-4 mt-1">
                     <BackwardIcon className="w-4 h-4 text-slate-600 cursor-pointer hover:text-slate-800 transition-colors" onClick={() => handleMusicCmd('prev')} />
-                    <div className="flex items-center justify-center w-7 h-7 rounded-full bg-white/60 hover:bg-white/90 shadow-sm cursor-pointer transition-all active:scale-95" onClick={() => handleMusicCmd('toggle')}>
+                    <div className="flex items-center justify-center w-7 h-7 rounded-full bg-white/60 hover:bg-white/90 shadow-sm cursor-pointer transition-[background-color,transform] active:scale-95" onClick={() => handleMusicCmd('toggle')}>
                       {musicState.playing ? <PauseIcon className="w-3.5 h-3.5 text-slate-800" /> : <PlayIcon className="w-3.5 h-3.5 text-slate-800 ml-0.5" />}
                     </div>
                     <ForwardIcon className="w-4 h-4 text-slate-600 cursor-pointer hover:text-slate-800 transition-colors" onClick={() => handleMusicCmd('next')} />
@@ -596,7 +618,7 @@ export default function DesktopWidgets({ onOpenDownloads, onOpenDida, authReady 
             )}
           </div>
 
-          {musicState?.cover ? <div className="absolute inset-0 z-0 opacity-25 bg-cover bg-center blur-2xl scale-150 pointer-events-none transition-all duration-1000" style={{ backgroundImage: `url(${musicState.cover})` }} /> : null}
+          {musicState?.cover ? <div className="absolute inset-0 z-0 opacity-25 bg-cover bg-center blur-2xl scale-150 pointer-events-none" style={{ backgroundImage: `url(${musicState.cover})` }} /> : null}
         </div>
       </div>
     </div>

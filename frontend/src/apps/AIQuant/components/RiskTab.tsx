@@ -41,7 +41,7 @@ function RiskIndicator({ label, value, limit, breached }: { label: string; value
         </span>
       </div>
       <div className="w-full bg-slate-100 rounded-full h-1.5">
-        <div className={`h-1.5 rounded-full transition-all ${barColor}`} style={{ width: `${ratio * 100}%` }} />
+        <div className={`h-1.5 rounded-full transition-[width] ${barColor}`} style={{ width: `${ratio * 100}%` }} />
       </div>
     </div>
   )

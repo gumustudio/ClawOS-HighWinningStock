@@ -3,14 +3,13 @@ import { Bell, Check, Trash2 } from 'lucide-react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useNotificationStore, type Notification } from '../store/useNotificationStore'
 import { format, isToday, isYesterday } from 'date-fns'
-import { DashboardIcon, MonitorIcon, FilesIcon, VideoIcon, LocalMusicIcon, DownloadsIcon, NotesIcon, ReaderIcon, QuarkIcon, NeteaseIcon, OpenClawIcon, OpenCodeIcon, DidaIcon } from './Icons'
+import { DashboardIcon, MonitorIcon, FilesIcon, VideoIcon, LocalMusicIcon, DownloadsIcon, NotesIcon, ReaderIcon, QuarkIcon, NeteaseIcon, OpenCodeIcon, DidaIcon } from './Icons'
 import AIQuantIcon from './AIQuantIcon'
 
 const APP_ICONS: Record<string, React.ElementType> = {
   aiquant: AIQuantIcon,
   dashboard: DashboardIcon,
   monitor: MonitorIcon,
-  openclaw: OpenClawIcon,
   opencode: OpenCodeIcon,
   files: FilesIcon,
   video: VideoIcon,
@@ -48,7 +47,7 @@ const groupNotifications = (notifications: Notification[]) => {
 const NotificationItem = ({ notification, onClosePanel }: { notification: Notification; onClosePanel: () => void }) => {
   const markAsRead = useNotificationStore((state) => state.markAsRead)
   const removeNotification = useNotificationStore((state) => state.removeNotification)
-  const AppIcon = APP_ICONS[notification.appId] || OpenClawIcon
+  const AppIcon = APP_ICONS[notification.appId] || OpenCodeIcon
 
   const handleClick = () => {
     void markAsRead(notification.id)
@@ -58,7 +57,7 @@ const NotificationItem = ({ notification, onClosePanel }: { notification: Notifi
   return (
     <div
       onClick={handleClick}
-      className={`relative p-3 rounded-xl transition-all cursor-pointer flex gap-3 group ${
+      className={`relative p-3 rounded-xl transition-[background-color,box-shadow,border-color] cursor-pointer flex gap-3 group ${
         notification.isRead 
           ? 'bg-transparent hover:bg-slate-100/50' 
           : 'bg-white hover:bg-slate-50 shadow-sm border border-slate-100'
@@ -93,17 +92,21 @@ const NotificationItem = ({ notification, onClosePanel }: { notification: Notifi
   )
 }
 
-export default function NotificationCenter() {
+interface NotificationCenterProps {
+  enabled?: boolean
+}
+
+export default function NotificationCenter({ enabled = true }: NotificationCenterProps) {
   const [isOpen, setIsOpen] = useState(false)
   const { notifications, unreadCount, markAllAsRead, clearAll, init, hydrated } = useNotificationStore()
   const groupedNotifications = groupNotifications(notifications)
   const panelRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
-    if (!hydrated) {
+    if (enabled && !hydrated) {
       void init()
     }
-  }, [hydrated, init])
+  }, [enabled, hydrated, init])
 
   // Close when clicking outside
   useEffect(() => {

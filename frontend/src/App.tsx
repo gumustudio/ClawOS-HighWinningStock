@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { Minus, Square, X, Settings } from 'lucide-react'
-import { DashboardIcon, MonitorIcon, FilesIcon, VideoIcon, LocalMusicIcon, DownloadsIcon, NotesIcon, ReaderIcon, QuarkIcon, NeteaseIcon, OpenClawIcon, OpenCodeIcon, DidaIcon } from './components/Icons'
+import { DashboardIcon, MonitorIcon, FilesIcon, VideoIcon, LocalMusicIcon, DownloadsIcon, NotesIcon, ReaderIcon, QuarkIcon, NeteaseIcon, OpenCodeIcon, DidaIcon } from './components/Icons'
 import NeteaseLogin from './components/NeteaseLogin'
 import DidaLogin from './components/DidaLogin'
 import LoginScreen from './components/LoginScreen'
@@ -23,7 +23,6 @@ import ReaderApp from './apps/ReaderApp'
 import DidaApp from './apps/DidaApp'
 import OpenCodeApp from './apps/OpenCodeApp'
 import { withBasePath } from './lib/basePath'
-import { buildEmbeddedOpenClawIframeUrl, primeEmbeddedOpenClawStorage } from './lib/openclawStorage'
 import DesktopWidgets from './components/DesktopWidgets'
 import { fetchServerUiConfig, saveServerUiConfig } from './lib/serverUiConfig'
 import { useNotificationStore } from './store/useNotificationStore'
@@ -31,7 +30,7 @@ import { useNotificationStore } from './store/useNotificationStore'
 
 
 
-type AppId = 'aiquant' | 'dashboard' | 'monitor' | 'openclaw' | 'opencode' | 'files' | 'video' | 'music' | 'localmusic' | 'downloads' | 'notes' | 'quark' | 'reader' | 'dida'
+type AppId = 'aiquant' | 'dashboard' | 'monitor' | 'opencode' | 'files' | 'video' | 'music' | 'localmusic' | 'downloads' | 'notes' | 'quark' | 'reader' | 'dida'
 
 interface AppDef {
   id: AppId
@@ -49,7 +48,6 @@ const APPS: AppDef[] = [
   { id: "aiquant", name: "AI 炒股", icon: AIQuantIcon, color: "" },
   { id: 'dashboard', name: '系统状态', icon: DashboardIcon, color: '' },
   { id: 'monitor', name: '服务监控', icon: MonitorIcon, color: '' },
-  { id: 'openclaw', name: 'OpenClaw', icon: OpenClawIcon, color: '' },
   { id: 'opencode', name: 'OpenCode', icon: OpenCodeIcon, color: '' },
   { id: 'files', name: '文件总管', icon: FilesIcon, color: '' },
   { id: 'video', name: '影视仓', icon: VideoIcon, color: '' },
@@ -88,26 +86,6 @@ function App() {
       }, 300) // brief delay to let React fully render the first frame
     }
   }, [])
-
-  const openClawGatewayUrl = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}${withBasePath('/proxy/openclaw')}`
-  const [openClawIframeUrl, setOpenClawIframeUrl] = useState<string | null>(null)
-
-  useEffect(() => {
-    if (!isAuthenticated) return
-    let cancelled = false
-
-    void primeEmbeddedOpenClawStorage(openClawGatewayUrl).then((token) => {
-      if (cancelled) {
-        return
-      }
-
-      setOpenClawIframeUrl(buildEmbeddedOpenClawIframeUrl(openClawGatewayUrl, token))
-    })
-
-    return () => {
-      cancelled = true
-    }
-  }, [isAuthenticated, openClawGatewayUrl])
 
   const [activeApp, setActiveApp] = useState<AppId | null>(null)
   const [lastActiveApp, setLastActiveApp] = useState<AppId | null>(null)
@@ -311,8 +289,11 @@ function App() {
   }, [])
 
   useEffect(() => {
-    if (!isAuthenticated) return
+    if (!isAuthenticated || !authFetchReady) return
+    let requestRunning = false
     const fetchMiniStats = async () => {
+      if (requestRunning) return
+      requestRunning = true
       try {
         const res = await fetch(withBasePath('/api/system/hardware'))
         const json = await res.json()
@@ -324,12 +305,14 @@ function App() {
         }
       } catch (err) {
         // silently ignore mini stats error
+      } finally {
+        requestRunning = false
       }
     }
     fetchMiniStats()
     const intv = setInterval(fetchMiniStats, 5000)
     return () => clearInterval(intv)
-  }, [isAuthenticated])
+  }, [isAuthenticated, authFetchReady])
 
   const handleClose = (e: React.MouseEvent) => {
     e.stopPropagation()
@@ -397,10 +380,6 @@ function App() {
       case 'aiquant': return <AIQuantApp />
       case 'dashboard': return <Dashboard />
       case 'monitor': return <ServiceMonitor />
-      case 'openclaw':
-        return openClawIframeUrl
-          ? <IframeApp url={openClawIframeUrl} title="OpenClaw" />
-          : <div className="flex h-full items-center justify-center bg-slate-50 text-sm text-slate-500">正在准备 OpenClaw 连接...</div>
       case 'opencode': return <OpenCodeApp />
       case 'files': return <IframeApp url={withBasePath('/proxy/filebrowser/')} title="FileBrowser" />
       case 'video': return <VideoApp />
@@ -419,11 +398,12 @@ function App() {
     <div className="relative w-screen h-screen overflow-hidden bg-slate-900 text-slate-800 font-sans select-none">
       {/* Wallpaper */}
       <div 
-        className="absolute inset-0 bg-cover bg-center z-0 transition-all duration-700 ease-in-out"
-        style={{ 
-          backgroundImage: `url(${wallpaper})`,
-          filter: activeApp ? 'brightness(0.95) blur(6px)' : 'brightness(1) blur(0px)'
-        }}
+        className="absolute inset-0 bg-cover bg-center z-0 will-change-auto"
+        style={{ backgroundImage: `url(${wallpaper})` }}
+      />
+      <div 
+        className="absolute inset-0 z-[1] bg-black/20 transition-opacity duration-500 ease-out pointer-events-none"
+        style={{ opacity: activeApp ? 1 : 0 }}
       />
 
       {/* Top Status Bar */}
@@ -462,13 +442,13 @@ function App() {
               <div className="flex items-center space-x-1">
                 <span className="text-[10px] text-slate-500 font-bold">C</span>
                 <div className="w-8 h-1.5 bg-slate-200/50 rounded-full overflow-hidden">
-                  <div className="bg-blue-500 h-full transition-all duration-1000" style={{ width: `${miniStats.cpu}%` }} />
+                  <div className="bg-blue-500 h-full rounded-full transition-[width] duration-1000" style={{ width: `${miniStats.cpu}%` }} />
                 </div>
               </div>
               <div className="flex items-center space-x-1">
                 <span className="text-[10px] text-slate-500 font-bold">M</span>
                 <div className="w-8 h-1.5 bg-slate-200/50 rounded-full overflow-hidden">
-                  <div className="bg-purple-500 h-full transition-all duration-1000" style={{ width: `${miniStats.mem}%` }} />
+                  <div className="bg-purple-500 h-full rounded-full transition-[width] duration-1000" style={{ width: `${miniStats.mem}%` }} />
                 </div>
               </div>
             </div>
@@ -477,7 +457,7 @@ function App() {
             <div className="w-2 h-2 rounded-full bg-green-500 mr-1.5 shadow-[0_0_8px_rgba(34,197,94,0.8)]" /> 
             Tailscale 正常
           </span>
-          <NotificationCenter />
+          <NotificationCenter enabled={authFetchReady} />
           <span>{time.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}</span>
         </div>
       </div>
@@ -497,9 +477,9 @@ function App() {
               <div 
                 key={app.id} 
                 onClick={() => setActiveApp(app.id)}
-                className="flex flex-col items-center justify-center w-24 h-28 rounded-xl hover:bg-white/20 hover:backdrop-blur-md transition-all cursor-pointer group active:scale-95"
+                className="flex flex-col items-center justify-center w-24 h-28 rounded-xl hover:bg-white/20 transition-[background-color,transform] duration-200 cursor-pointer group active:scale-95"
               >
-                <div className="w-16 h-16 rounded-2xl bg-white/40 backdrop-blur-lg border border-white/50 shadow-xl flex items-center justify-center group-hover:shadow-2xl group-hover:-translate-y-1 transition-all">
+                <div className="w-16 h-16 rounded-2xl bg-white/40 backdrop-blur-lg border border-white/50 shadow-xl flex items-center justify-center group-hover:shadow-2xl group-hover:-translate-y-1 transition-[transform,box-shadow] duration-200">
                   <app.icon className={`w-8 h-8 ${app.color} drop-shadow-sm`} />
                 </div>
                 <span className="mt-2 text-xs font-medium text-slate-800 bg-white/40 px-3 py-1 rounded-full backdrop-blur-md border border-white/20 shadow-sm">{app.name}</span>
@@ -527,7 +507,7 @@ function App() {
           zIndex: 20
         }}
       >
-        <DesktopWidgets authReady={authFetchReady} onOpenDownloads={() => setActiveApp('downloads')} onOpenDida={() => setActiveApp('dida')} />
+        <DesktopWidgets authReady={authFetchReady && !activeApp && showWidgets} onOpenDownloads={() => setActiveApp('downloads')} onOpenDida={() => setActiveApp('dida')} />
       </motion.div>
 
       {/* Settings Panel */}
@@ -739,31 +719,33 @@ function App() {
       </AnimatePresence>
 
       {/* Active App Window */}
-      <motion.div 
-        initial={false}
-        animate={{ 
-          opacity: activeApp ? 1 : 0, 
-          y: activeApp ? 0 : 20, 
-          scale: activeApp ? 1 : 0.98,
-          pointerEvents: activeApp ? 'auto' : 'none',
-          paddingTop: activeApp && maximizedApps.has(activeApp) ? 32 : 48,
-          paddingLeft: activeApp && maximizedApps.has(activeApp) ? 0 : windowPadX,
-          paddingRight: activeApp && maximizedApps.has(activeApp) ? 0 : windowPadX,
-          paddingBottom: activeApp && maximizedApps.has(activeApp) 
-            ? (showBottomDock && isDockVisible ? dockSize + 40 : 0)
-            : (showBottomDock && isDockVisible ? dockSize + 48 : 48)
-        }}
-        transition={{ type: "spring", damping: 25, stiffness: 300 }}
-        className={`absolute z-30 flex flex-col pointer-events-none inset-0`}
-      >
-        <motion.div 
-          animate={{
-            borderRadius: activeApp && maximizedApps.has(activeApp) ? 0 : 16
+      {(() => {
+        const visualApp = activeApp || lastActiveApp
+        const isMaximized = visualApp ? maximizedApps.has(visualApp) : false
+        return (
+        <div 
+          className="absolute z-30 flex flex-col pointer-events-none"
+          style={{ 
+            top: isMaximized ? 32 : 48,
+            left: isMaximized ? 0 : windowPadX,
+            right: isMaximized ? 0 : windowPadX,
+            bottom: isMaximized 
+              ? (showBottomDock && isDockVisible ? dockSize + 40 : 0)
+              : (showBottomDock && isDockVisible ? dockSize + 48 : 48),
+            opacity: activeApp ? 1 : 0,
+            transform: activeApp ? 'scale(1)' : 'scale(0.96)',
+            pointerEvents: activeApp ? 'auto' : 'none',
+            transition: 'opacity 0.25s cubic-bezier(0.4,0,0.2,1), transform 0.35s cubic-bezier(0.4,0,0.2,1), top 0.35s cubic-bezier(0.4,0,0.2,1), left 0.35s cubic-bezier(0.4,0,0.2,1), right 0.35s cubic-bezier(0.4,0,0.2,1), bottom 0.35s cubic-bezier(0.4,0,0.2,1)'
           }}
-          transition={{ type: "spring", damping: 25, stiffness: 300 }}
+        >
+        <div
           className={`w-full h-full bg-white/60 backdrop-blur-2xl shadow-[0_30px_60px_rgba(0,0,0,0.12)] overflow-hidden flex flex-col ${
-            activeApp && maximizedApps.has(activeApp) ? 'border-0 border-transparent' : 'border border-white/50'
+            isMaximized ? 'border-0 border-transparent' : 'border border-white/50'
           } ${activeApp ? 'pointer-events-auto' : 'pointer-events-none'}`}
+          style={{
+            borderRadius: isMaximized ? 0 : 16,
+            transition: 'border-radius 0.35s cubic-bezier(0.4,0,0.2,1), border-color 0.2s ease'
+          }}
         >
           {/* Window Header - macOS Style */}
           <div className="h-8 bg-white/40 border-b border-white/50 flex items-center px-3 flex-shrink-0 select-none relative transition-colors duration-300" onDoubleClick={handleMaximize}>
@@ -825,8 +807,10 @@ function App() {
               </div>
             ))}
           </div>
-        </motion.div>
-      </motion.div>
+        </div>
+        </div>
+        )
+      })()}
 
       {/* Bottom edge trigger for auto-hide dock */}
       {showBottomDock && autoHideDock && !isDockVisible && (
@@ -856,7 +840,7 @@ function App() {
                 className="relative group cursor-pointer"
               >
                 <div
-                  className={`rounded-2xl flex items-center justify-center transition-all duration-300 ${activeApp === app.id ? 'bg-white/80 scale-110 shadow-lg' : 'bg-white/30 hover:bg-white/60 hover:-translate-y-2 hover:shadow-xl'}`}
+                  className={`rounded-2xl flex items-center justify-center transition-[background-color,transform,box-shadow] duration-300 ${activeApp === app.id ? 'bg-white/80 scale-110 shadow-lg' : 'bg-white/30 hover:bg-white/60 hover:-translate-y-2 hover:shadow-xl'}`}
                   style={{ width: dockSize, height: dockSize }}
                 >
                   <app.icon className={`${app.color}`} style={{ width: dockSize / 2, height: dockSize / 2 }} />

@@ -13,6 +13,26 @@ import { clearMusicState, registerMusicCommandHandler, reportMusicState } from '
 import { fetchServerPaths, saveServerPaths } from '../lib/serverPaths'
 
 type PlayMode = 'sequence' | 'random' | 'single'
+type LocalMusicView = 'library' | 'search'
+
+interface MusicDownloadSource {
+  id: string
+  label: string
+}
+
+interface MusicDownloadResult {
+  id: string
+  title: string
+  artist: string
+  album: string
+  duration: string
+  fileSize: string
+  format: string
+  source: string
+  sourceLabel: string
+  cover: string
+  raw: Record<string, unknown>
+}
 
 export interface LocalTrack {
   id: string
@@ -54,6 +74,14 @@ interface WarmupStatus {
   lastRunAt: string | null
 }
 
+const MUSIC_DOWNLOAD_SOURCES: MusicDownloadSource[] = [
+  { id: 'netease', label: '网易云' },
+  { id: 'qq', label: 'QQ音乐' },
+  { id: 'kuwo', label: '酷我' },
+  { id: 'kugou', label: '酷狗' },
+  { id: 'migu', label: '咪咕' },
+]
+
 export default function LocalMusicApp() {
   const [isPlaying, setIsPlaying] = useState(false)
   const [songs, setSongs] = useState<LocalTrack[]>([])
@@ -74,6 +102,14 @@ export default function LocalMusicApp() {
 
   const [toasts, setToasts] = useState<Toast[]>([])
   const [warmupStatus, setWarmupStatus] = useState<WarmupStatus | null>(null)
+  const [activeView, setActiveView] = useState<LocalMusicView>('library')
+  const [downloadKeyword, setDownloadKeyword] = useState('')
+  const [downloadResults, setDownloadResults] = useState<MusicDownloadResult[]>([])
+  const [selectedDownloadIds, setSelectedDownloadIds] = useState<string[]>([])
+  const [selectedSources, setSelectedSources] = useState<string[]>(['kuwo', 'kugou', 'migu'])
+  const [resultLimit, setResultLimit] = useState(10)
+  const [searchingMusic, setSearchingMusic] = useState(false)
+  const [downloadingMusic, setDownloadingMusic] = useState(false)
   
   const showToast = (message: string, type: 'success' | 'error' | 'info' = 'info') => {
     const id = Date.now()
@@ -82,6 +118,8 @@ export default function LocalMusicApp() {
       setToasts(prev => prev.filter(t => t.id !== id))
     }, 3000)
   }
+
+  const getDownloadResultKey = (result: MusicDownloadResult, index: number) => `${result.source}:${result.id}:${index}`
   
   const audioRef = useRef<HTMLAudioElement>(null)
   const lyricsRef = useRef<HTMLDivElement>(null)
@@ -402,6 +440,107 @@ export default function LocalMusicApp() {
     replayCurrentSong()
   }
 
+  const toggleDownloadSource = (sourceId: string) => {
+    setSelectedSources((previous) => {
+      if (previous.includes(sourceId)) {
+        const next = previous.filter((source) => source !== sourceId)
+        return next.length > 0 ? next : previous
+      }
+      return [...previous, sourceId]
+    })
+  }
+
+  const toggleDownloadSelection = (resultId: string) => {
+    setSelectedDownloadIds((previous) => previous.includes(resultId)
+      ? previous.filter((id) => id !== resultId)
+      : [...previous, resultId])
+  }
+
+  const handleSearchDownloadMusic = async (event?: React.FormEvent) => {
+    if (event) event.preventDefault()
+    const keyword = downloadKeyword.trim()
+    if (!keyword) {
+      showToast('请输入歌曲、歌手或专辑关键词', 'error')
+      return
+    }
+    if (!musicDir) {
+      showToast('请先配置本地音乐目录', 'error')
+      return
+    }
+
+    setSearchingMusic(true)
+    setDownloadResults([])
+    setSelectedDownloadIds([])
+    try {
+      const search = new URLSearchParams()
+      search.set('keyword', keyword)
+      search.set('sources', selectedSources.join(','))
+      search.set('limit', String(resultLimit))
+      const res = await fetch(`/api/system/localmusic/search-download?${search.toString()}`, {
+        headers: { 'x-music-dir': encodeURIComponent(musicDir) }
+      })
+      const data = await res.json()
+      if (!data.success) {
+        showToast(data.error || '搜索失败', 'error')
+        return
+      }
+      const results = Array.isArray(data.data) ? data.data as MusicDownloadResult[] : []
+      setDownloadResults(results)
+      showToast(`搜索完成，找到 ${results.length} 首`, results.length > 0 ? 'success' : 'info')
+    } catch (error) {
+      console.error(error)
+      showToast('搜索请求失败', 'error')
+    } finally {
+      setSearchingMusic(false)
+    }
+  }
+
+  const handleDownloadSearchResults = async (mode: 'selected' | 'single', result?: MusicDownloadResult) => {
+    if (!musicDir) {
+      showToast('请先配置本地音乐目录', 'error')
+      return
+    }
+
+    const targets = mode === 'single'
+      ? (result ? [result] : [])
+      : downloadResults.filter((item, index) => selectedDownloadIds.includes(getDownloadResultKey(item, index)))
+
+    if (targets.length === 0) {
+      showToast('请先勾选要下载的歌曲', 'error')
+      return
+    }
+
+    setDownloadingMusic(true)
+    try {
+      const res = await fetch('/api/system/localmusic/search-download/download', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-music-dir': encodeURIComponent(musicDir)
+        },
+        body: JSON.stringify({
+          songs: targets,
+          sources: selectedSources.join(','),
+          limit: resultLimit
+        })
+      })
+      const data = await res.json()
+      if (!data.success) {
+        showToast(data.error || '下载失败', 'error')
+        return
+      }
+      showToast(`下载完成，已保存到本地音乐目录`, 'success')
+      setSelectedDownloadIds([])
+      await scanLibrary()
+      setActiveView('library')
+    } catch (error) {
+      console.error(error)
+      showToast('下载请求失败', 'error')
+    } finally {
+      setDownloadingMusic(false)
+    }
+  }
+
   useEffect(() => {
     const handleVisibilityChange = () => {
       if (!document.hidden) {
@@ -558,6 +697,22 @@ export default function LocalMusicApp() {
         <div className="flex items-center space-x-3">
           <LocalMusicIcon className="w-8 h-8" />
           <h2 className="text-lg font-bold text-slate-800">本地音乐 Pro</h2>
+          <div className="ml-4 flex items-center rounded-xl bg-slate-100 p-1 text-xs font-semibold">
+            <button
+              type="button"
+              onClick={() => setActiveView('library')}
+              className={`rounded-lg px-3 py-1.5 transition-colors ${activeView === 'library' ? 'bg-white text-[#31c27c] shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+            >
+              本地曲库
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveView('search')}
+              className={`rounded-lg px-3 py-1.5 transition-colors ${activeView === 'search' ? 'bg-white text-[#31c27c] shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+            >
+              搜索音乐
+            </button>
+          </div>
         </div>
         <div className="flex items-center space-x-3">
           <button 
@@ -588,16 +743,141 @@ export default function LocalMusicApp() {
           </div>
           <div className="w-40 h-2 rounded-full bg-emerald-100 overflow-hidden flex-shrink-0">
             <div
-              className="h-full bg-emerald-500 transition-all duration-300"
+              className="h-full bg-emerald-500 transition-[width] duration-300"
               style={{ width: `${warmupStatus.total > 0 ? (warmupStatus.completed / warmupStatus.total) * 100 : 0}%` }}
             />
           </div>
         </div>
       )}
 
-      {/* Main Content (Library View) */}
+      {/* Main Content */}
       <div className="flex-1 overflow-auto bg-slate-50 p-6 pb-28 relative z-0">
-        {loading ? (
+        {activeView === 'search' ? (
+          <div className="mx-auto flex w-full max-w-6xl flex-col gap-5">
+            <div className="rounded-3xl border border-emerald-100 bg-white p-6 shadow-sm">
+              <div className="mb-5 flex flex-wrap items-start justify-between gap-4">
+                <div>
+                  <h3 className="text-xl font-bold text-slate-900">搜索音乐</h3>
+                  <p className="mt-1 text-sm text-slate-500">调用本机 Python musicdl 搜索多平台结果，下载文件会保存到当前本地音乐目录。</p>
+                </div>
+                <div className="rounded-2xl border border-amber-100 bg-amber-50 px-4 py-3 text-xs leading-5 text-amber-700">
+                  仅用于个人已有权益内容备份/学习测试。第三方源可用性和音质字段取决于上游接口。
+                </div>
+              </div>
+
+              <form onSubmit={handleSearchDownloadMusic} className="flex flex-col gap-4">
+                <div className="flex flex-wrap gap-3">
+                  {MUSIC_DOWNLOAD_SOURCES.map((source) => (
+                    <button
+                      key={source.id}
+                      type="button"
+                      onClick={() => toggleDownloadSource(source.id)}
+                      className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition-colors ${selectedSources.includes(source.id) ? 'border-[#31c27c] bg-[#31c27c]/10 text-[#1f9d63]' : 'border-slate-200 bg-white text-slate-500 hover:bg-slate-50'}`}
+                    >
+                      {source.label}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="flex flex-wrap items-center gap-3">
+                  <input
+                    value={downloadKeyword}
+                    onChange={(event) => setDownloadKeyword(event.target.value)}
+                    placeholder="搜索歌曲、歌手、专辑..."
+                    className="min-w-[280px] flex-1 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none transition-all focus:border-[#31c27c] focus:bg-white focus:ring-2 focus:ring-[#31c27c]/20"
+                  />
+                  <label className="flex items-center gap-2 text-xs font-medium text-slate-500">
+                    每源数量
+                    <input
+                      type="number"
+                      min={1}
+                      max={30}
+                      value={resultLimit}
+                      onChange={(event) => setResultLimit(Math.max(1, Math.min(30, Number(event.target.value) || 10)))}
+                      className="w-20 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none focus:border-[#31c27c]"
+                    />
+                  </label>
+                  <button
+                    type="submit"
+                    disabled={searchingMusic || downloadingMusic}
+                    className="rounded-2xl bg-[#31c27c] px-6 py-3 text-sm font-bold text-white shadow-sm shadow-emerald-500/20 transition-colors hover:bg-[#28a76a] disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {searchingMusic ? '搜索中...' : '搜索'}
+                  </button>
+                </div>
+              </form>
+            </div>
+
+            <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+              <div className="mb-4 flex items-center justify-between gap-4">
+                <div className="text-sm font-bold text-slate-700">搜索结果 <span className="font-normal text-slate-400">({downloadResults.length} 首)</span></div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setSelectedDownloadIds(downloadResults.length === selectedDownloadIds.length ? [] : downloadResults.map((item, index) => getDownloadResultKey(item, index)))}
+                    disabled={downloadResults.length === 0 || downloadingMusic}
+                    className="rounded-xl border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-500 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {downloadResults.length > 0 && downloadResults.length === selectedDownloadIds.length ? '取消全选' : '全选'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleDownloadSearchResults('selected')}
+                    disabled={selectedDownloadIds.length === 0 || downloadingMusic}
+                    className="rounded-xl bg-slate-900 px-3 py-2 text-xs font-semibold text-white transition-colors hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {downloadingMusic ? '下载中...' : `下载选中 ${selectedDownloadIds.length}`}
+                  </button>
+                </div>
+              </div>
+
+              {searchingMusic && downloadResults.length === 0 ? (
+                <div className="flex h-32 items-center justify-center text-sm text-slate-400">正在搜索多平台音乐...</div>
+              ) : downloadResults.length === 0 ? (
+                <div className="flex h-40 flex-col items-center justify-center text-slate-400">
+                  <MusicalNoteIcon className="mb-3 h-10 w-10 opacity-40" />
+                  <p className="text-sm">输入关键词后开始搜索高质量音乐</p>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {downloadResults.map((item, index) => {
+                    const resultKey = getDownloadResultKey(item, index)
+                    const selected = selectedDownloadIds.includes(resultKey)
+                    return (
+                      <div key={`${item.source}-${item.id}-${index}`} className={`grid grid-cols-12 items-center gap-3 rounded-2xl border px-3 py-3 text-sm transition-colors ${selected ? 'border-[#31c27c]/40 bg-[#31c27c]/5' : 'border-slate-100 hover:bg-slate-50'}`}>
+                        <div className="col-span-1 flex items-center gap-2 text-slate-400">
+                          <input type="checkbox" checked={selected} onChange={() => toggleDownloadSelection(resultKey)} className="h-4 w-4 accent-[#31c27c]" />
+                          <span>{index + 1}</span>
+                        </div>
+                        <div className="col-span-4 flex min-w-0 items-center gap-3">
+                          {item.cover ? <img src={item.cover} onError={handleImageError} className="h-10 w-10 flex-shrink-0 rounded-xl object-cover" alt="cover" /> : <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-slate-100"><MusicalNoteIcon className="h-5 w-5 text-slate-400" /></div>}
+                          <div className="min-w-0">
+                            <div className="truncate font-semibold text-slate-800" title={item.title}>{item.title}</div>
+                            <div className="truncate text-xs text-slate-400" title={item.album}>{item.album || '未知专辑'}</div>
+                          </div>
+                        </div>
+                        <div className="col-span-2 truncate text-slate-500" title={item.artist}>{item.artist}</div>
+                        <div className="col-span-1 text-xs font-semibold text-emerald-600">{item.format || '未知'}</div>
+                        <div className="col-span-1 text-xs text-slate-400">{item.fileSize || '-'}</div>
+                        <div className="col-span-1 text-xs text-slate-400">{item.sourceLabel}</div>
+                        <div className="col-span-2 flex justify-end">
+                          <button
+                            type="button"
+                            onClick={() => void handleDownloadSearchResults('single', item)}
+                            disabled={downloadingMusic}
+                            className="rounded-xl bg-[#31c27c]/10 px-3 py-2 text-xs font-bold text-[#1f9d63] transition-colors hover:bg-[#31c27c]/20 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            下载
+                          </button>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        ) : loading ? (
           <div className="flex items-center justify-center h-32 text-slate-400">正在扫描解析音乐文件，请稍候...</div>
         ) : songs.length === 0 ? (
            <div className="flex flex-col items-center justify-center h-48 text-slate-400">
@@ -685,7 +965,7 @@ export default function LocalMusicApp() {
                   animate={{ opacity: 0.5, scale: 1.25 }}
                   exit={{ opacity: 0 }}
                   transition={{ duration: 1.5, ease: "easeInOut" }}
-                  className="absolute inset-0 bg-cover bg-center blur-[80px]"
+                  className="absolute inset-0 bg-cover bg-center blur-[30px] scale-125"
                   style={{ backgroundImage: `url(/api/system/localmusic/cover/${(currentSong as any).id})` }}
                 />
               </AnimatePresence>
@@ -696,23 +976,23 @@ export default function LocalMusicApp() {
             <div className="h-20 flex items-center justify-between px-8 z-20">
               <button 
                 onClick={() => setShowImmersive(false)}
-                className="w-10 h-10 rounded-full bg-white/10 hover:bg-white/25 flex items-center justify-center backdrop-blur-xl transition-all shadow-lg"
+                className="w-10 h-10 rounded-full bg-white/10 hover:bg-white/25 flex items-center justify-center backdrop-blur-xl transition-[background-color,box-shadow] shadow-lg"
               >
                 <ChevronDownIcon className="w-6 h-6 text-white drop-shadow-md" />
               </button>
 
               <button 
                 onClick={() => setPureLyricMode(!pureLyricMode)}
-                className={`px-5 py-2 rounded-full backdrop-blur-xl transition-all duration-500 text-sm font-bold border shadow-lg ${pureLyricMode ? 'bg-white/20 border-white/40 text-white shadow-[0_0_20px_rgba(255,255,255,0.2)]' : 'bg-white/5 border-white/10 text-white/70 hover:bg-white/15 hover:text-white'}`}
+                className={`px-5 py-2 rounded-full backdrop-blur-xl transition-[background-color,border-color,color,box-shadow] duration-500 text-sm font-bold border shadow-lg ${pureLyricMode ? 'bg-white/20 border-white/40 text-white shadow-[0_0_20px_rgba(255,255,255,0.2)]' : 'bg-white/5 border-white/10 text-white/70 hover:bg-white/15 hover:text-white'}`}
               >
                 {pureLyricMode ? '退出纯净模式' : '纯净歌词模式'}
               </button>
             </div>
 
             {/* Content */}
-            <div className="flex-1 flex px-12 lg:px-24 pb-28 z-20 transition-all duration-700 h-full overflow-hidden">
+            <div className="flex-1 flex px-12 lg:px-24 pb-28 z-20 h-full overflow-hidden">
               {/* Left: Cover Art */}
-              <div className={`flex flex-col items-center justify-center transition-all duration-[800ms] overflow-hidden ${pureLyricMode ? 'w-0 opacity-0 scale-75 m-0' : 'flex-1 opacity-100 scale-100'}`}>
+              <div className={`flex flex-col items-center justify-center transition-[opacity,transform,width,flex] duration-500 overflow-hidden ${pureLyricMode ? 'w-0 opacity-0 scale-75 m-0' : 'flex-1 opacity-100 scale-100'}`}>
                 <motion.div 
                   animate={isPlaying ? { 
                     scale: [1, 1.02, 1], 
@@ -738,7 +1018,7 @@ export default function LocalMusicApp() {
               </div>
 
               {/* Right: Lyrics */}
-              <div className={`flex items-center justify-center overflow-hidden transition-all duration-[800ms] relative h-full ${pureLyricMode ? 'flex-[2] max-w-5xl mx-auto' : 'flex-1'}`}>
+              <div className={`flex items-center justify-center overflow-hidden transition-[flex,width,max-width] duration-500 relative h-full ${pureLyricMode ? 'flex-[2] max-w-5xl mx-auto' : 'flex-1'}`}>
                 <div 
                   ref={lyricsRef}
                   onWheel={handleUserInteraction}
@@ -764,12 +1044,12 @@ export default function LocalMusicApp() {
                           <div 
                             key={i} 
                             id={`lyric-${i}`}
-                            className={`transition-all duration-[800ms] ease-[cubic-bezier(0.2,0.8,0.2,1)] origin-center ${
+                            className={`transition-[opacity,transform,font-size,color] duration-[800ms] ease-[cubic-bezier(0.2,0.8,0.2,1)] origin-center ${
                               isActive 
-                                ? `active-lyric text-white ${pureLyricMode ? 'text-[52px]' : 'text-[44px]'} leading-snug font-black opacity-100 blur-none drop-shadow-[0_0_24px_rgba(255,255,255,0.4)] scale-100` 
+                                ? `active-lyric text-white ${pureLyricMode ? 'text-[52px]' : 'text-[44px]'} leading-snug font-black opacity-100 drop-shadow-[0_0_24px_rgba(255,255,255,0.4)] scale-100` 
                                 : isAdjacent
-                                  ? `text-white/60 ${pureLyricMode ? 'text-[36px]' : 'text-[30px]'} leading-snug font-bold opacity-60 blur-[1px] scale-95 hover:text-white/80 cursor-pointer`
-                                  : `text-white/30 ${pureLyricMode ? 'text-[28px]' : 'text-[22px]'} leading-snug font-semibold opacity-30 blur-[2.5px] scale-90 hover:text-white/60 cursor-pointer`
+                                  ? `text-white/60 ${pureLyricMode ? 'text-[36px]' : 'text-[30px]'} leading-snug font-bold opacity-60 scale-95 hover:text-white/80 cursor-pointer`
+                                  : `text-white/30 ${pureLyricMode ? 'text-[28px]' : 'text-[22px]'} leading-snug font-semibold opacity-30 scale-90 hover:text-white/60 cursor-pointer`
                             }`}
                             onClick={() => {
                               if (audioRef.current) audioRef.current.currentTime = lrc.time

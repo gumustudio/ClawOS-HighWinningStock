@@ -235,7 +235,7 @@ export default function VideoApp() {
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-6">
           {results.map((movie, idx) => (
             <div key={`${movie.id}-${idx}`} className="group relative flex flex-col cursor-pointer" onClick={() => openPlayer(movie)}>
-              <div className="relative w-full aspect-[2/3] rounded-xl bg-slate-200 shadow-md overflow-hidden mb-3 group-hover:shadow-xl transition-all duration-300 group-hover:-translate-y-1">
+              <div className="relative w-full aspect-[2/3] rounded-xl bg-slate-200 shadow-md overflow-hidden mb-3 group-hover:shadow-xl transition-[box-shadow,transform] duration-300 group-hover:-translate-y-1">
                 {movie.pic ? (
                   <img src={movie.pic} alt={movie.name} className="w-full h-full object-cover" onError={(e) => { (e.target as any).src = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=' }} />
                 ) : (
@@ -253,7 +253,7 @@ export default function VideoApp() {
               
               <button 
                 onClick={(e) => pushToAria2(e, movie)}
-                className="mt-2 flex items-center justify-center w-full py-1.5 bg-rose-50 text-rose-600 rounded-lg text-xs font-medium opacity-0 group-hover:opacity-100 hover:bg-rose-100 transition-all duration-200"
+                className="mt-2 flex items-center justify-center w-full py-1.5 bg-rose-50 text-rose-600 rounded-lg text-xs font-medium opacity-0 group-hover:opacity-100 hover:bg-rose-100 transition-[opacity,background-color] duration-200"
               >
                 <ArrowDownTrayIcon className="w-3 h-3 mr-1" /> 推送下载
               </button>

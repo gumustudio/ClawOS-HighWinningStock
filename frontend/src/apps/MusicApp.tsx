@@ -1074,7 +1074,7 @@ export default function MusicApp({ isActive = true }: { isActive?: boolean }) {
                   animate={{ opacity: 0.5, scale: 1.25 }}
                   exit={{ opacity: 0 }}
                   transition={{ duration: 1.5, ease: "easeInOut" }}
-                  className="absolute inset-0 bg-cover bg-center blur-[80px]"
+                  className="absolute inset-0 bg-cover bg-center blur-[30px] scale-125"
                   style={{ backgroundImage: (currentSong as any).cover ? `url(${(currentSong as any).cover})` : 'none' }}
                 />
               </AnimatePresence>
@@ -1085,23 +1085,23 @@ export default function MusicApp({ isActive = true }: { isActive?: boolean }) {
             <div className="h-20 flex items-center justify-between px-8 z-20">
               <button 
                 onClick={() => setShowImmersive(false)}
-                className="w-10 h-10 rounded-full bg-white/10 hover:bg-white/25 flex items-center justify-center backdrop-blur-xl transition-all shadow-lg"
+                className="w-10 h-10 rounded-full bg-white/10 hover:bg-white/25 flex items-center justify-center backdrop-blur-xl transition-[background-color,box-shadow] shadow-lg"
               >
                 <ChevronDownIcon className="w-6 h-6 text-white drop-shadow-md" />
               </button>
 
               <button 
                 onClick={() => setPureLyricMode(!pureLyricMode)}
-                className={`px-5 py-2 rounded-full backdrop-blur-xl transition-all duration-500 text-sm font-bold border shadow-lg ${pureLyricMode ? 'bg-rose-500/80 border-rose-400 text-white shadow-[0_0_20px_rgba(244,63,94,0.4)]' : 'bg-white/5 border-white/10 text-white/70 hover:bg-white/15 hover:text-white'}`}
+                className={`px-5 py-2 rounded-full backdrop-blur-xl transition-[background-color,border-color,color,box-shadow] duration-500 text-sm font-bold border shadow-lg ${pureLyricMode ? 'bg-rose-500/80 border-rose-400 text-white shadow-[0_0_20px_rgba(244,63,94,0.4)]' : 'bg-white/5 border-white/10 text-white/70 hover:bg-white/15 hover:text-white'}`}
               >
                 {pureLyricMode ? '退出纯净模式' : '纯净歌词模式'}
               </button>
             </div>
 
             {/* Content */}
-            <div className="flex-1 flex px-12 lg:px-24 pb-28 z-20 transition-all duration-700 h-full overflow-hidden">
+            <div className="flex-1 flex px-12 lg:px-24 pb-28 z-20 h-full overflow-hidden">
               {/* Left: Cover Art */}
-              <div className={`flex flex-col items-center justify-center transition-all duration-[800ms] overflow-hidden ${pureLyricMode ? 'w-0 opacity-0 scale-75 m-0' : 'flex-1 opacity-100 scale-100'}`}>
+              <div className={`flex flex-col items-center justify-center transition-[opacity,transform,width,flex] duration-500 overflow-hidden ${pureLyricMode ? 'w-0 opacity-0 scale-75 m-0' : 'flex-1 opacity-100 scale-100'}`}>
                 <motion.div 
                   animate={isPlaying ? { 
                     scale: [1, 1.02, 1], 
@@ -1127,7 +1127,7 @@ export default function MusicApp({ isActive = true }: { isActive?: boolean }) {
               </div>
 
               {/* Right: Lyrics */}
-              <div className={`flex items-center justify-center overflow-hidden transition-all duration-[800ms] relative h-full ${pureLyricMode ? 'flex-[2] max-w-5xl mx-auto' : 'flex-1'}`}>
+              <div className={`flex items-center justify-center overflow-hidden transition-[flex,width,max-width] duration-500 relative h-full ${pureLyricMode ? 'flex-[2] max-w-5xl mx-auto' : 'flex-1'}`}>
                 <div 
                   ref={lyricsRef}
                   onWheel={handleUserInteraction}
@@ -1153,12 +1153,12 @@ export default function MusicApp({ isActive = true }: { isActive?: boolean }) {
                           <div 
                             key={i} 
                             id={`lyric-${i}`}
-                            className={`transition-all duration-[800ms] ease-[cubic-bezier(0.2,0.8,0.2,1)] origin-center ${
+                            className={`transition-[opacity,transform,font-size,color] duration-[800ms] ease-[cubic-bezier(0.2,0.8,0.2,1)] origin-center ${
                               isActive 
-                                ? `active-lyric text-rose-50 ${pureLyricMode ? 'text-[52px]' : 'text-[44px]'} leading-snug font-black opacity-100 blur-none drop-shadow-[0_0_24px_rgba(244,63,94,0.6)] scale-100` 
+                                ? `active-lyric text-rose-50 ${pureLyricMode ? 'text-[52px]' : 'text-[44px]'} leading-snug font-black opacity-100 drop-shadow-[0_0_24px_rgba(244,63,94,0.6)] scale-100` 
                                 : isAdjacent
-                                  ? `text-white/60 ${pureLyricMode ? 'text-[36px]' : 'text-[30px]'} leading-snug font-bold opacity-60 blur-[1px] scale-95 hover:text-white/80 cursor-pointer`
-                                  : `text-white/30 ${pureLyricMode ? 'text-[28px]' : 'text-[22px]'} leading-snug font-semibold opacity-30 blur-[2.5px] scale-90 hover:text-white/60 cursor-pointer`
+                                  ? `text-white/60 ${pureLyricMode ? 'text-[36px]' : 'text-[30px]'} leading-snug font-bold opacity-60 scale-95 hover:text-white/80 cursor-pointer`
+                                  : `text-white/30 ${pureLyricMode ? 'text-[28px]' : 'text-[22px]'} leading-snug font-semibold opacity-30 scale-90 hover:text-white/60 cursor-pointer`
                             }`}
                             onClick={() => {
                               if (audioRef.current) audioRef.current.currentTime = lrc.time

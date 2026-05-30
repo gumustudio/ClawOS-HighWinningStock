@@ -705,7 +705,7 @@ export default function DownloadApp() {
               </div>
 
               <div className="relative w-full h-1.5 bg-slate-100 rounded-full overflow-hidden">
-                <div className={`absolute left-0 top-0 h-full transition-all duration-500 rounded-full ${statusMeta.barTone}`} style={{ width: `${progress}%` }} />
+                <div className={`absolute left-0 top-0 h-full transition-[width] duration-500 rounded-full ${statusMeta.barTone}`} style={{ width: `${progress}%` }} />
               </div>
             </div>
           )

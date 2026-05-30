@@ -181,7 +181,7 @@ export default function Dashboard() {
             <span className="text-lg text-slate-500 mb-1">%</span>
           </div>
           <div className="relative z-10 w-full bg-slate-200/50 rounded-full h-1.5 mt-4 overflow-hidden backdrop-blur-sm">
-            <div className="bg-blue-500 h-1.5 rounded-full transition-all duration-1000" style={{ width: `${stats.cpu.usage}%` }}></div>
+            <div className="bg-blue-500 h-1.5 rounded-full transition-[width] duration-1000" style={{ width: `${stats.cpu.usage}%` }}></div>
           </div>
           <Sparkline data={history.cpu} colorClass="text-blue-500" fillClass="text-blue-200" />
         </div>
@@ -200,7 +200,7 @@ export default function Dashboard() {
             <span className="text-lg text-slate-500 mb-1">%</span>
           </div>
           <div className="relative z-10 w-full bg-slate-200/50 rounded-full h-1.5 mt-4 overflow-hidden backdrop-blur-sm">
-            <div className="bg-purple-500 h-1.5 rounded-full transition-all duration-1000" style={{ width: `${stats.memory.usagePercent}%` }}></div>
+            <div className="bg-purple-500 h-1.5 rounded-full transition-[width] duration-1000" style={{ width: `${stats.memory.usagePercent}%` }}></div>
           </div>
           <Sparkline data={history.mem} colorClass="text-purple-500" fillClass="text-purple-200" />
         </div>
