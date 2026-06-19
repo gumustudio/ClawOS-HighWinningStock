@@ -1,6 +1,6 @@
 {
   "name": "backend",
-  "version": "1.37.0",
+  "version": "1.38.0",
   "description": "",
   "main": "index.js",
   "scripts": {
@@ -16,6 +16,7 @@
   "type": "commonjs",
   "dependencies": {
     "@types/http-proxy-middleware": "^0.19.3",
+    "compression": "^1.8.1",
     "cors": "^2.8.6",
     "dotenv": "^17.3.1",
     "express": "^5.2.1",
@@ -29,6 +30,7 @@
     "winston": "^3.19.0"
   },
   "devDependencies": {
+    "@types/compression": "^1.8.1",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
     "@types/node": "^25.5.0",

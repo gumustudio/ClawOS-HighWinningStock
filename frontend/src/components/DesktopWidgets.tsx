@@ -87,9 +87,10 @@ interface DesktopWidgetsProps {
   onOpenDownloads?: () => void
   onOpenDida?: () => void
   authReady?: boolean
+  onHwStats?: (cpu: number, mem: number) => void
 }
 
-export default function DesktopWidgets({ onOpenDownloads, onOpenDida, authReady = false }: DesktopWidgetsProps) {
+export default function DesktopWidgets({ onOpenDownloads, onOpenDida, authReady = false, onHwStats }: DesktopWidgetsProps) {
   const [hwStats, setHwStats] = useState<any>(null)
   const [netStats, setNetStats] = useState<any>(null)
   const [downloads, setDownloads] = useState<DownloadWidgetTask[]>([])
@@ -127,7 +128,10 @@ export default function DesktopWidgets({ onOpenDownloads, onOpenDida, authReady 
         ])
         const hwJson = await hwRes.json()
         const netJson = await netRes.json()
-        if (hwJson.success) setHwStats(hwJson.data)
+        if (hwJson.success) {
+          setHwStats(hwJson.data)
+          onHwStats?.(parseFloat(hwJson.data.cpu.usage), parseFloat(hwJson.data.memory.usagePercent))
+        }
         if (netJson.success) setNetStats(netJson.data)
       } catch {
       } finally {

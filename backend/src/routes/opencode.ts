@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import crypto from 'crypto';
-import { controlOpenCodeService, getOpenCodeServiceStatus, hasOpenCodeAppLockPassword, OPENCODE_APP_LOCK_PASSWORD, type OpenCodeServiceAction } from '../utils/opencodeService';
+import { controlOpenCodeService, getOpenCodeServiceStatus, getOpenCodeVersionInfo, performOpenCodeUpdate, hasOpenCodeAppLockPassword, OPENCODE_APP_LOCK_PASSWORD, type OpenCodeServiceAction } from '../utils/opencodeService';
 import { logger } from '../utils/logger';
 
 const router = Router();
@@ -89,6 +89,26 @@ router.post('/service/:action', async (req, res) => {
     res.json({ success: true, data: status });
   } catch (error: any) {
     logger.error(`OpenCode service ${action} failed: ${error.message}`, { module: 'OpenCode' });
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+router.get('/version', async (_req, res) => {
+  try {
+    const info = await getOpenCodeVersionInfo();
+    res.json({ success: true, data: info });
+  } catch (error: any) {
+    logger.error(`OpenCode version check failed: ${error.message}`, { module: 'OpenCode' });
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+router.post('/update', async (_req, res) => {
+  try {
+    const result = await performOpenCodeUpdate();
+    res.json({ success: true, data: result });
+  } catch (error: any) {
+    logger.error(`OpenCode update failed: ${error.message}`, { module: 'OpenCode' });
     res.status(500).json({ success: false, error: error.message });
   }
 });

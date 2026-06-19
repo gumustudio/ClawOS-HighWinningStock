@@ -1,7 +1,21 @@
 import { execFile } from 'child_process';
 import { promisify } from 'util';
+import fs from 'fs';
+import path from 'path';
+import { logger } from './logger';
 
 const execFileAsync = promisify(execFile);
+
+const NPM_BIN = '/usr/bin/npm';
+function npmEnv(): { [key: string]: string } {
+  const cleanPath = [
+    '/usr/bin',
+    '/usr/local/bin',
+    '/bin',
+    process.env.PATH || '',
+  ].join(':');
+  return { ...process.env, PATH: cleanPath };
+}
 
 export const OPENCODE_WEB_UNIT = 'opencode-web.service';
 export const OPENCODE_WEB_PORT = 4096;
@@ -101,4 +115,81 @@ export async function getOpenCodeServiceStatus(): Promise<OpenCodeServiceStatus>
     health: probe.health,
     healthDetail: probe.detail,
   };
+}
+
+let cachedNpmPrefix: string | null = null;
+
+async function getNpmGlobalPrefix(): Promise<string> {
+  if (cachedNpmPrefix) {
+    return cachedNpmPrefix;
+  }
+  const { stdout } = await execFileAsync(NPM_BIN, ['config', 'get', 'prefix'], {
+    timeout: 10000,
+    env: npmEnv(),
+  });
+  cachedNpmPrefix = stdout.trim();
+  return cachedNpmPrefix;
+}
+
+async function getInstalledOpenCodeVersion(): Promise<string | null> {
+  try {
+    const prefix = await getNpmGlobalPrefix();
+    const pkgPath = path.join(prefix, 'lib', 'node_modules', 'opencode-ai', 'package.json');
+    const content = await fs.promises.readFile(pkgPath, 'utf-8');
+    const pkg = JSON.parse(content) as { version?: string };
+    return pkg.version ?? null;
+  } catch (error: any) {
+    logger.warn(`Failed to read installed OpenCode version: ${error.message}`, { module: 'OpenCode' });
+    return null;
+  }
+}
+
+async function getLatestOpenCodeVersion(): Promise<string | null> {
+  try {
+    const { stdout } = await execFileAsync(NPM_BIN, ['view', 'opencode-ai', 'version'], {
+      timeout: 20000,
+      env: npmEnv(),
+    });
+    return stdout.trim() || null;
+  } catch (error: any) {
+    logger.warn(`Failed to fetch latest OpenCode version: ${error.message}`, { module: 'OpenCode' });
+    return null;
+  }
+}
+
+export interface OpenCodeVersionInfo {
+  current: string | null;
+  latest: string | null;
+  hasUpdate: boolean;
+}
+
+export async function getOpenCodeVersionInfo(): Promise<OpenCodeVersionInfo> {
+  const [current, latest] = await Promise.all([
+    getInstalledOpenCodeVersion(),
+    getLatestOpenCodeVersion(),
+  ]);
+  return {
+    current,
+    latest,
+    hasUpdate: !!(current && latest && current !== latest),
+  };
+}
+
+export interface OpenCodeUpdateResult {
+  versionInfo: OpenCodeVersionInfo;
+  restarted: boolean;
+}
+
+export async function performOpenCodeUpdate(): Promise<OpenCodeUpdateResult> {
+  logger.info('Starting OpenCode package update via npm...', { module: 'OpenCode' });
+  await execFileAsync(NPM_BIN, ['install', '-g', 'opencode-ai@latest'], {
+    timeout: 120000,
+    env: npmEnv(),
+  });
+  logger.info('OpenCode package updated, restarting web service...', { module: 'OpenCode' });
+  cachedNpmPrefix = null;
+  await controlOpenCodeService('restart');
+  const versionInfo = await getOpenCodeVersionInfo();
+  logger.info(`OpenCode update complete: now ${versionInfo.current}`, { module: 'OpenCode' });
+  return { versionInfo, restarted: true };
 }

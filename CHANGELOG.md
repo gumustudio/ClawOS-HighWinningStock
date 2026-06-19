@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.38.0] - 2026-06-19 — OpenCode 版本管理与远程加载性能优化
+### 新增
+- **[OpenCode 版本管理] 新增版本检查与一键更新**：OpenCode 应用解锁后自动检查当前版本与 npm registry 最新版本；iframe 右上角浮动版本徽章，有新版本时高亮提示"更新到 vX.X.X"，管理面板提供"检查更新 / 一键更新"操作；更新过程自动执行 `npm install -g opencode-ai@latest` 并重启 `opencode-web.service`。
+- **[OpenCode 自动检查] 每日 10:00 自动检查 OpenCode 更新**：新增 `opencode/scheduler.ts`，通过 `node-cron` 注册每日定时任务；发现新版本且未通知过时，向系统通知中心推送提醒，避免 OpenCode 版本长期落后。
+- **[远程加载] 后端启用 gzip 压缩中间件**：Express `compression()` 显式匹配 JS/CSS/JSON/HTML/SVG，首屏 JS 传输量从 504KB 降至 156KB（节省 69%）。
+- **[远程加载] 静态资源强缓存**：`/assets/` 目录返回 `Cache-Control: public, max-age=31536000, immutable`，配合 Vite content hash 避免重复下载。
+- **[代码分割] 13 个应用组件改为 `React.lazy()` 动态导入**：首屏不再加载全部应用代码，按需加载独立 chunk。
+- **[Dock 交互] Dock 图标支持右键退出**：顶部迷你 Dock 和底部 Dock 图标右键弹出 ContextMenu，已打开应用可"退出 XXX"。
+
+### 修复
+- **[OpenCode] 清理 playwright-mcp 子进程堆积**：`opencode-web.service` 长期运行后堆积多个 `@playwright/mcp` 子进程（实测 4 个占用 1.2GB），重启服务后内存降至 219MB。
+
+### 移除
+- **[OpenClaw] 完全移除 OpenClaw 集成**：删除 7 个专属文件，后端/前端/测试/脚本全清，README 中 18 处引用清理。
+
 ## [1.37.0] - 2026-05-07 — 本地音乐新增多源搜索下载
 ### 新增
 - **[本地音乐 Pro] 新增“搜索音乐”页面**：在本地曲库旁新增独立 tab，可按关键词搜索网易云、QQ、酷我、酷狗、咪咕等来源，展示歌名、歌手、专辑、格式、大小、来源和封面。

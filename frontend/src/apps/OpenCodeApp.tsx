@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Lock, Play, Power, RefreshCw, RotateCcw } from 'lucide-react'
+import { ArrowUpCircle, Lock, Loader2, Play, Power, RefreshCw, RotateCcw } from 'lucide-react'
 import IframeApp from './IframeApp'
 import { withBasePath } from '../lib/basePath'
 import { OpenCodeIcon } from '../components/Icons'
@@ -12,6 +12,12 @@ interface OpenCodeStatus {
   healthDetail: string
 }
 
+interface VersionInfo {
+  current: string | null
+  latest: string | null
+  hasUpdate: boolean
+}
+
 export default function OpenCodeApp() {
   const [unlocked, setUnlocked] = useState(false)
   const [password, setPassword] = useState('')
@@ -19,6 +25,9 @@ export default function OpenCodeApp() {
   const [status, setStatus] = useState<OpenCodeStatus | null>(null)
   const [loading, setLoading] = useState(false)
   const [serviceBusy, setServiceBusy] = useState(false)
+  const [versionInfo, setVersionInfo] = useState<VersionInfo | null>(null)
+  const [versionChecking, setVersionChecking] = useState(false)
+  const [updating, setUpdating] = useState(false)
 
   const refreshStatus = async () => {
     setLoading(true)
@@ -36,9 +45,43 @@ export default function OpenCodeApp() {
   useEffect(() => {
     if (!unlocked) return
     void refreshStatus()
+    void checkVersion()
     const timer = window.setInterval(() => void refreshStatus(), 5000)
     return () => window.clearInterval(timer)
   }, [unlocked])
+
+  const checkVersion = async () => {
+    setVersionChecking(true)
+    try {
+      const response = await fetch(withBasePath('/api/system/opencode/version'))
+      const payload = await response.json()
+      if (payload.success) {
+        setVersionInfo(payload.data)
+      }
+    } finally {
+      setVersionChecking(false)
+    }
+  }
+
+  const doUpdate = async () => {
+    setUpdating(true)
+    setError('')
+    setStatus(null)
+    try {
+      const response = await fetch(withBasePath('/api/system/opencode/update'), { method: 'POST' })
+      const payload = await response.json().catch(() => null)
+      if (!response.ok || !payload?.success) {
+        setError(payload?.error || 'OpenCode 更新失败')
+        return
+      }
+      setVersionInfo(payload.data.versionInfo)
+      window.setTimeout(() => void refreshStatus(), 2000)
+    } catch (e: any) {
+      setError(e.message || 'OpenCode 更新失败')
+    } finally {
+      setUpdating(false)
+    }
+  }
 
   const unlock = async () => {
     setError('')
@@ -112,7 +155,7 @@ export default function OpenCodeApp() {
     )
   }
 
-  if (status?.isRunning && status.health === 'ok') {
+  if (status?.isRunning && status.health === 'ok' && !updating) {
     return <IframeApp url={withBasePath('/proxy/opencode/')} title="OpenCode" />
   }
 
@@ -123,12 +166,35 @@ export default function OpenCodeApp() {
           <OpenCodeIcon className="h-14 w-14" />
           <div>
             <div className="text-2xl font-bold">OpenCode Web</div>
-            <div className="mt-1 text-sm text-slate-400">{status?.healthDetail || '正在读取服务状态...'}</div>
+            <div className="mt-1 text-sm text-slate-400">{updating ? '正在更新 OpenCode 并重启服务...' : status?.healthDetail || '正在读取服务状态...'}</div>
           </div>
         </div>
         <div className="mt-6 rounded-2xl border border-white/10 bg-slate-900 p-4 text-sm text-slate-300">
           <div>systemd: <span className="font-mono text-slate-100">{status?.unit || 'opencode-web.service'}</span></div>
           <div className="mt-2">状态: <span className="font-mono text-slate-100">{loading ? 'checking' : status?.status || 'unknown'}</span></div>
+        </div>
+        <div className="mt-3 rounded-2xl border border-white/10 bg-slate-900 p-4 text-sm text-slate-300">
+          <div className="flex items-center justify-between">
+            <span>版本</span>
+            <button type="button" onClick={() => void checkVersion()} disabled={versionChecking || updating} className="text-xs text-teal-300 transition hover:text-teal-200 disabled:opacity-50">
+              {versionChecking ? '检查中...' : '检查更新'}
+            </button>
+          </div>
+          <div className="mt-2 flex items-center gap-2">
+            <span className="font-mono text-slate-100">v{versionInfo?.current || '未知'}</span>
+            {versionInfo?.hasUpdate && (
+              <>
+                <span className="text-slate-500">→</span>
+                <span className="font-mono text-amber-300">v{versionInfo.latest}</span>
+                <button type="button" onClick={() => void doUpdate()} disabled={updating} className="ml-auto flex items-center gap-1.5 rounded-lg bg-amber-500 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-amber-400 disabled:opacity-60">
+                  {updating ? <><Loader2 className="h-3 w-3 animate-spin" />更新中</> : <><ArrowUpCircle className="h-3.5 w-3.5" />一键更新</>}
+                </button>
+              </>
+            )}
+            {!versionInfo?.hasUpdate && versionInfo?.latest && (
+              <span className="ml-auto text-xs text-emerald-400">已是最新</span>
+            )}
+          </div>
         </div>
         <div className="mt-6 grid grid-cols-2 gap-3">
           <button type="button" disabled={serviceBusy} onClick={() => void controlService('start')} className="flex items-center justify-center gap-2 rounded-2xl bg-teal-400 px-4 py-3 font-semibold text-slate-950 transition hover:bg-teal-300 disabled:opacity-60">

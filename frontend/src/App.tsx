@@ -1,5 +1,6 @@
-import { useState, useEffect } from 'react'
-import { Minus, Square, X, Settings } from 'lucide-react'
+import { useState, useEffect, lazy, Suspense } from 'react'
+import { Minus, Square, X, Settings, LogOut } from 'lucide-react'
+import * as ContextMenu from '@radix-ui/react-context-menu'
 import { DashboardIcon, MonitorIcon, FilesIcon, VideoIcon, LocalMusicIcon, DownloadsIcon, NotesIcon, ReaderIcon, QuarkIcon, NeteaseIcon, OpenCodeIcon, DidaIcon } from './components/Icons'
 import NeteaseLogin from './components/NeteaseLogin'
 import DidaLogin from './components/DidaLogin'
@@ -8,24 +9,25 @@ import ToastProvider from './components/ToastProvider'
 import NotificationCenter from './components/NotificationCenter'
 
 import { motion, AnimatePresence } from 'framer-motion'
-import Dashboard from './apps/Dashboard'
-import ServiceMonitor from './apps/Monitor'
-import IframeApp from './apps/IframeApp'
-import VideoApp from './apps/VideoApp'
-import MusicApp from './apps/MusicApp'
-import LocalMusicApp from './apps/LocalMusicApp'
-import DownloadApp from './apps/DownloadApp'
-import NotesApp from './apps/NotesApp'
-import AIQuantApp from "./apps/AIQuantApp"
 import AIQuantIcon from "./components/AIQuantIcon"
-import NetdiskApp from './apps/NetdiskApp'
-import ReaderApp from './apps/ReaderApp'
-import DidaApp from './apps/DidaApp'
-import OpenCodeApp from './apps/OpenCodeApp'
 import { withBasePath } from './lib/basePath'
 import DesktopWidgets from './components/DesktopWidgets'
 import { fetchServerUiConfig, saveServerUiConfig } from './lib/serverUiConfig'
 import { useNotificationStore } from './store/useNotificationStore'
+
+const Dashboard = lazy(() => import('./apps/Dashboard'))
+const ServiceMonitor = lazy(() => import('./apps/Monitor'))
+const IframeApp = lazy(() => import('./apps/IframeApp'))
+const VideoApp = lazy(() => import('./apps/VideoApp'))
+const MusicApp = lazy(() => import('./apps/MusicApp'))
+const LocalMusicApp = lazy(() => import('./apps/LocalMusicApp'))
+const DownloadApp = lazy(() => import('./apps/DownloadApp'))
+const NotesApp = lazy(() => import('./apps/NotesApp'))
+const AIQuantApp = lazy(() => import('./apps/AIQuantApp'))
+const NetdiskApp = lazy(() => import('./apps/NetdiskApp'))
+const ReaderApp = lazy(() => import('./apps/ReaderApp'))
+const DidaApp = lazy(() => import('./apps/DidaApp'))
+const OpenCodeApp = lazy(() => import('./apps/OpenCodeApp'))
 
 
 
@@ -288,32 +290,6 @@ function App() {
     return () => clearInterval(timer)
   }, [])
 
-  useEffect(() => {
-    if (!isAuthenticated || !authFetchReady) return
-    let requestRunning = false
-    const fetchMiniStats = async () => {
-      if (requestRunning) return
-      requestRunning = true
-      try {
-        const res = await fetch(withBasePath('/api/system/hardware'))
-        const json = await res.json()
-        if (json.success) {
-          setMiniStats({
-            cpu: parseFloat(json.data.cpu.usage),
-            mem: parseFloat(json.data.memory.usagePercent)
-          })
-        }
-      } catch (err) {
-        // silently ignore mini stats error
-      } finally {
-        requestRunning = false
-      }
-    }
-    fetchMiniStats()
-    const intv = setInterval(fetchMiniStats, 5000)
-    return () => clearInterval(intv)
-  }, [isAuthenticated, authFetchReady])
-
   const handleClose = (e: React.MouseEvent) => {
     e.stopPropagation()
     setActiveApp(null) // 隐藏至后台，和最小化一致
@@ -341,6 +317,21 @@ function App() {
 
   const handleDockAppClick = (appId: AppId) => {
     setActiveApp((current) => (current === appId ? null : appId))
+  }
+
+  const quitApp = (appId: AppId) => {
+    if (activeApp === appId) setActiveApp(null)
+    if (lastActiveApp === appId) setLastActiveApp(null)
+    setOpenedApps(prev => {
+      const next = new Set(prev)
+      next.delete(appId)
+      return next
+    })
+    setMaximizedApps(prev => {
+      const next = new Set(prev)
+      next.delete(appId)
+      return next
+    })
   }
 
   // Login handler
@@ -375,24 +366,26 @@ function App() {
 
   const showBottomDock = !showMiniDock
 
-  const renderAppContent = (id: AppId) => {
-    switch (id) {
-      case 'aiquant': return <AIQuantApp />
-      case 'dashboard': return <Dashboard />
-      case 'monitor': return <ServiceMonitor />
-      case 'opencode': return <OpenCodeApp />
-      case 'files': return <IframeApp url={withBasePath('/proxy/filebrowser/')} title="FileBrowser" />
-      case 'video': return <VideoApp />
-      case 'music': return <MusicApp isActive={activeApp === 'music'} />
-      case 'localmusic': return <LocalMusicApp />
-      case 'downloads': return <DownloadApp />
-      case 'notes': return <NotesApp />
-      case 'dida': return <DidaApp />
-      case 'reader': return <ReaderApp />
-      case 'quark': return <NetdiskApp brand="quark" />
-      default: return null
-    }
-  }
+  const renderAppContent = (id: AppId) => (
+    <Suspense fallback={<div className="flex items-center justify-center h-full text-sm text-slate-400">加载中…</div>}>
+      {(() => { switch (id) {
+        case 'aiquant': return <AIQuantApp />
+        case 'dashboard': return <Dashboard />
+        case 'monitor': return <ServiceMonitor />
+        case 'opencode': return <OpenCodeApp />
+        case 'files': return <IframeApp url={withBasePath('/proxy/filebrowser/')} title="FileBrowser" />
+        case 'video': return <VideoApp />
+        case 'music': return <MusicApp isActive={activeApp === 'music'} />
+        case 'localmusic': return <LocalMusicApp />
+        case 'downloads': return <DownloadApp />
+        case 'notes': return <NotesApp />
+        case 'dida': return <DidaApp />
+        case 'reader': return <ReaderApp />
+        case 'quark': return <NetdiskApp brand="quark" />
+        default: return null
+      }})()}
+    </Suspense>
+  )
 
   return (
     <div className="relative w-screen h-screen overflow-hidden bg-slate-900 text-slate-800 font-sans select-none">
@@ -421,17 +414,33 @@ function App() {
           <div className="absolute left-1/2 top-0 hidden h-full -translate-x-1/2 items-center md:flex">
             <div className="flex h-7 items-center gap-0.5 rounded-xl border border-white/30 bg-white/20 px-1 shadow-[inset_0_1px_0_rgba(255,255,255,0.38)] backdrop-blur-xl">
             {APPS.map((app) => (
-              <button
-                key={app.id}
-                onClick={() => handleDockAppClick(app.id)}
-                title={app.name}
-                className={`relative flex h-6 w-7 items-center justify-center rounded-lg transition-colors duration-150 ${activeApp === app.id ? 'bg-white/70 shadow-[0_1px_3px_rgba(15,23,42,0.12)]' : 'hover:bg-white/45'}`}
-              >
-                <app.icon className="h-3.5 w-3.5 drop-shadow-[0_1px_1px_rgba(15,23,42,0.18)]" />
+              <ContextMenu.Root key={app.id}>
+                <ContextMenu.Trigger asChild>
+                  <button
+                    onClick={() => handleDockAppClick(app.id)}
+                    title={app.name}
+                    className={`relative flex h-6 w-7 items-center justify-center rounded-lg transition-colors duration-150 ${activeApp === app.id ? 'bg-white/70 shadow-[0_1px_3px_rgba(15,23,42,0.12)]' : 'hover:bg-white/45'}`}
+                  >
+                    <app.icon className="h-3.5 w-3.5 drop-shadow-[0_1px_1px_rgba(15,23,42,0.18)]" />
+                    {openedApps.has(app.id) && (
+                      <span className={`absolute bottom-0.5 left-1/2 h-0.5 -translate-x-1/2 rounded-full ${activeApp === app.id ? 'w-3 bg-slate-700' : 'w-1.5 bg-slate-500/70'}`} />
+                    )}
+                  </button>
+                </ContextMenu.Trigger>
                 {openedApps.has(app.id) && (
-                  <span className={`absolute bottom-0.5 left-1/2 h-0.5 -translate-x-1/2 rounded-full ${activeApp === app.id ? 'w-3 bg-slate-700' : 'w-1.5 bg-slate-500/70'}`} />
+                  <ContextMenu.Portal>
+                    <ContextMenu.Content className="min-w-[140px] bg-white rounded-lg shadow-lg border border-slate-100 p-1 z-[9999] text-xs overflow-hidden animate-in fade-in zoom-in-95">
+                      <ContextMenu.Item
+                        className="flex items-center px-2.5 py-1.5 cursor-pointer outline-none hover:bg-red-50 hover:text-red-600 rounded text-slate-600 data-[highlighted]:bg-red-50 data-[highlighted]:text-red-600"
+                        onSelect={() => quitApp(app.id)}
+                      >
+                        <LogOut className="w-3 h-3 mr-2" />
+                        退出 {app.name}
+                      </ContextMenu.Item>
+                    </ContextMenu.Content>
+                  </ContextMenu.Portal>
                 )}
-              </button>
+              </ContextMenu.Root>
             ))}
             </div>
           </div>
@@ -507,7 +516,7 @@ function App() {
           zIndex: 20
         }}
       >
-        <DesktopWidgets authReady={authFetchReady && !activeApp && showWidgets} onOpenDownloads={() => setActiveApp('downloads')} onOpenDida={() => setActiveApp('dida')} />
+        <DesktopWidgets authReady={authFetchReady && !activeApp && showWidgets} onOpenDownloads={() => setActiveApp('downloads')} onOpenDida={() => setActiveApp('dida')} onHwStats={(cpu, mem) => setMiniStats({ cpu, mem })} />
       </motion.div>
 
       {/* Settings Panel */}
@@ -831,27 +840,43 @@ function App() {
             onMouseLeave={() => setIsHoveringDock(false)}
           >
             {APPS.map(app => (
-              <div
-                key={app.id}
-                onClick={(e) => {
-                  e.stopPropagation()
-                  handleDockAppClick(app.id)
-                }}
-                className="relative group cursor-pointer"
-              >
-                <div
-                  className={`rounded-2xl flex items-center justify-center transition-[background-color,transform,box-shadow] duration-300 ${activeApp === app.id ? 'bg-white/80 scale-110 shadow-lg' : 'bg-white/30 hover:bg-white/60 hover:-translate-y-2 hover:shadow-xl'}`}
-                  style={{ width: dockSize, height: dockSize }}
-                >
-                  <app.icon className={`${app.color}`} style={{ width: dockSize / 2, height: dockSize / 2 }} />
-                </div>
-                {activeApp === app.id && (
-                  <div className="absolute -bottom-1.5 left-1/2 transform -translate-x-1/2 w-1.5 h-1.5 bg-slate-600 rounded-full" />
+              <ContextMenu.Root key={app.id}>
+                <ContextMenu.Trigger asChild>
+                  <div
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      handleDockAppClick(app.id)
+                    }}
+                    className="relative group cursor-pointer"
+                  >
+                    <div
+                      className={`rounded-2xl flex items-center justify-center transition-[background-color,transform,box-shadow] duration-300 ${activeApp === app.id ? 'bg-white/80 scale-110 shadow-lg' : 'bg-white/30 hover:bg-white/60 hover:-translate-y-2 hover:shadow-xl'}`}
+                      style={{ width: dockSize, height: dockSize }}
+                    >
+                      <app.icon className={`${app.color}`} style={{ width: dockSize / 2, height: dockSize / 2 }} />
+                    </div>
+                    {activeApp === app.id && (
+                      <div className="absolute -bottom-1.5 left-1/2 transform -translate-x-1/2 w-1.5 h-1.5 bg-slate-600 rounded-full" />
+                    )}
+                    {activeApp !== app.id && openedApps.has(app.id) && (
+                      <div className="absolute -bottom-1.5 left-1/2 transform -translate-x-1/2 w-1 h-1 bg-slate-400 rounded-full" />
+                    )}
+                  </div>
+                </ContextMenu.Trigger>
+                {openedApps.has(app.id) && (
+                  <ContextMenu.Portal>
+                    <ContextMenu.Content className="min-w-[140px] bg-white rounded-lg shadow-lg border border-slate-100 p-1 z-[9999] text-xs overflow-hidden animate-in fade-in zoom-in-95">
+                      <ContextMenu.Item
+                        className="flex items-center px-2.5 py-1.5 cursor-pointer outline-none hover:bg-red-50 hover:text-red-600 rounded text-slate-600 data-[highlighted]:bg-red-50 data-[highlighted]:text-red-600"
+                        onSelect={() => quitApp(app.id)}
+                      >
+                        <LogOut className="w-3 h-3 mr-2" />
+                        退出 {app.name}
+                      </ContextMenu.Item>
+                    </ContextMenu.Content>
+                  </ContextMenu.Portal>
                 )}
-                {activeApp !== app.id && openedApps.has(app.id) && (
-                  <div className="absolute -bottom-1.5 left-1/2 transform -translate-x-1/2 w-1 h-1 bg-slate-400 rounded-full" />
-                )}
-              </div>
+              </ContextMenu.Root>
             ))}
           </div>
         </div>

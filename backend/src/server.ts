@@ -1,5 +1,6 @@
 import express from 'express';
 import cors from 'cors';
+import compression from 'compression';
 import dotenv from 'dotenv';
 import crypto from 'crypto';
 import fs from 'fs';
@@ -16,6 +17,7 @@ import { clearQuarkAuthSession, getCachedQuarkAuthSession, readQuarkAuthSession,
 import { initCronJobs } from './routes/cron';
 import { initReaderScheduler } from './services/reader/scheduler';
 import { initStockAnalysisScheduler } from './services/stock-analysis/scheduler';
+import { initOpenCodeScheduler } from './services/opencode/scheduler';
 import { getOpenCodeBasicAuthHeader, OPENCODE_WEB_TARGET } from './utils/opencodeService';
 import { hasOpenCodeAppAccess } from './routes/opencode';
 
@@ -24,6 +26,7 @@ dotenv.config();
 void initCronJobs();
 initReaderScheduler();
 initStockAnalysisScheduler();
+initOpenCodeScheduler();
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -313,8 +316,9 @@ function getOpenCodeProxyBasePath(requestPath: string): string {
 function injectOpenCodeRequestRewrite(html: string, requestPath: string): string {
   const proxyPrefix = getOpenCodeProxyBasePath(requestPath);
   const marker = '</head>';
-  const rewriteScript = `<script>(function(){const prefix='${proxyPrefix}';const rewriteUrl=(input)=>{if(typeof input!=='string'){return input;}if(input.startsWith(location.origin+'/assets/')){return location.origin+prefix+input.slice(location.origin.length);}if(input.startsWith('/assets/')){return prefix+input;}if(!input.startsWith('/')||input.startsWith(prefix+'/')){return input;}if(input.startsWith('/proxy/')||input.startsWith('/clawos/')){return input;}return prefix+input;};const originalFetch=window.fetch.bind(window);window.fetch=(input,init)=>{if(typeof input==='string'){return originalFetch(rewriteUrl(input),init);}if(input instanceof Request){return originalFetch(new Request(rewriteUrl(input.url.replace(location.origin,'')),input),init);}return originalFetch(input,init);};const originalOpen=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(method,url,async,username,password){return originalOpen.call(this,method,rewriteUrl(url),async,username,password);};const OriginalEventSource=window.EventSource;window.EventSource=function(url,config){return new OriginalEventSource(rewriteUrl(url),config);};window.EventSource.prototype=OriginalEventSource.prototype;const OriginalWebSocket=window.WebSocket;window.WebSocket=function(url,protocols){if(typeof url==='string'){if(url.startsWith('ws://')||url.startsWith('wss://')){const parsed=new URL(url);url=(location.protocol==='https:'?'wss://':'ws://')+location.host+rewriteUrl(parsed.pathname+parsed.search);}else{url=(location.protocol==='https:'?'wss://':'ws://')+location.host+rewriteUrl(url);}}return protocols?new OriginalWebSocket(url,protocols):new OriginalWebSocket(url);};window.WebSocket.prototype=OriginalWebSocket.prototype;})();</script>`;
+  const rewriteScript = `<script>(function(){const prefix='${proxyPrefix}';const pn=location.pathname;if(pn.startsWith(prefix)){history.replaceState(null,'',(pn.slice(prefix.length)||'/')+location.search+location.hash);}const rewriteUrl=(input)=>{if(typeof input!=='string'){return input;}if(input.startsWith(location.origin)){input=input.slice(location.origin.length);}if(input.startsWith(location.origin+'/assets/')){return location.origin+prefix+input.slice(location.origin.length);}if(input.startsWith('/assets/')){return prefix+input;}if(!input.startsWith('/')){if(input.startsWith('http')||input.startsWith('//')||input.startsWith('?')||input.startsWith('#')||input.startsWith('data:')||input.startsWith('blob:')){return input;}return prefix+'/'+input;}if(input.startsWith(prefix+'/')){return input;}if(input.startsWith('/proxy/')||input.startsWith('/clawos/')){return input;}return prefix+input;};const originalFetch=window.fetch.bind(window);window.fetch=(input,init)=>{var m=(init&&init.method)||(input instanceof Request?input.method:'GET');if(m!=='GET'&&m!=='HEAD'){return originalFetch(input,init);}if(typeof input==='string'){return originalFetch(rewriteUrl(input),init);}if(input instanceof Request){return originalFetch(new Request(rewriteUrl(input.url.replace(location.origin,'')),input),init);}return originalFetch(input,init);};const originalOpen=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(method,url,async,username,password){return originalOpen.call(this,method,rewriteUrl(url),async,username,password);};const OriginalEventSource=window.EventSource;window.EventSource=function(url,config){return new OriginalEventSource(rewriteUrl(url),config);};window.EventSource.prototype=OriginalEventSource.prototype;const OriginalWebSocket=window.WebSocket;window.WebSocket=function(url,protocols){if(typeof url==='string'){if(url.startsWith('ws://')||url.startsWith('wss://')){const parsed=new URL(url);url=(location.protocol==='https:'?'wss://':'ws://')+location.host+rewriteUrl(parsed.pathname+parsed.search);}else{url=(location.protocol==='https:'?'wss://':'ws://')+location.host+rewriteUrl(url);}}return protocols?new OriginalWebSocket(url,protocols):new OriginalWebSocket(url);};window.WebSocket.prototype=OriginalWebSocket.prototype;})();</script>`;
   const rewrittenHtml = html
+    .replace(/<head([^>]*)>/i, `<head$1><base href="${proxyPrefix}/">`)
     .replace(/(href|src|content)="\.\/assets\//g, `$1="${proxyPrefix}/assets/`)
     .replace(/(href|src|content)='\.\/assets\//g, `$1='${proxyPrefix}/assets/`)
     .replace(/(href|src|content)="\/(?!\/|proxy\/|clawos\/)([^"]*)"/g, `$1="${proxyPrefix}/$2"`)
@@ -326,8 +330,7 @@ function injectOpenCodeRequestRewrite(html: string, requestPath: string): string
 function rewriteOpenCodeScriptPaths(source: string, requestPath: string): string {
   const proxyPrefix = getOpenCodeProxyBasePath(requestPath);
   return source
-    .replace(/(["'`])\/assets\//g, `$1${proxyPrefix}/assets/`)
-    .replace(/(["'`])assets\//g, `$1${proxyPrefix}/assets/`);
+    .replace(/(["'`])\/assets\//g, `$1${proxyPrefix}/assets/`);
 }
 
 function getRemoteAddress(req: { headers?: Record<string, string | string[] | undefined>; socket?: { remoteAddress?: string | undefined } }): string {
@@ -462,6 +465,16 @@ function isAllowedCorsOrigin(origin: string): boolean {
   }
 }
 
+app.use(compression({
+  filter: (req, res) => {
+    if (req.headers['x-no-compression']) return false
+    if (req.url && req.url.includes('/proxy/opencode/')) return false
+    const ct = res.getHeader('content-type') as string | undefined
+    if (ct && /javascript|css|json|html|xml|text|svg/i.test(ct)) return true
+    return compression.filter(req, res)
+  },
+}));
+
 app.use(cors({
   origin: (origin, callback) => {
     // 允许无 origin 请求（同源 / curl / 代理内部调用）
@@ -518,10 +531,16 @@ app.use((req, res, next) => {
 
 startPerformanceHeartbeat();
 
-// Serve static frontend files FIRST - no authentication needed to load the UI
 const frontendPath = path.resolve(__dirname, '../../frontend/dist');
-app.use(express.static(frontendPath));
-app.use('/clawos', express.static(frontendPath, { redirect: false }));
+const staticCacheOptions = {
+  setHeaders: (res: express.Response, filePath: string) => {
+    if (filePath.includes('/assets/')) {
+      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+    }
+  },
+};
+app.use(express.static(frontendPath, staticCacheOptions));
+app.use('/clawos', express.static(frontendPath, { ...staticCacheOptions, redirect: false }));
 
 // Auth verification endpoint (no authentication needed for login)
 app.post('/api/system/auth/verify', express.json(), (req, res) => {
@@ -578,7 +597,7 @@ const opencodeAssetRewriteProxy = createProxyMiddleware({
 
       const response = (req as IncomingMessage & { res?: express.Response }).res;
       response?.removeHeader('content-security-policy');
-      response?.setHeader('content-security-policy', "default-src 'self' data: blob:; base-uri 'none'; object-src 'none'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' blob:; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data:; media-src 'self' data: blob:; connect-src 'self' data: blob: ws: wss:");
+      response?.setHeader('content-security-policy', "default-src 'self' data: blob:; base-uri 'self'; object-src 'none'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' blob:; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data:; media-src 'self' data: blob:; connect-src 'self' data: blob: ws: wss: https://opencode.ai");
 
       const contentType = String(proxyRes.headers['content-type'] ?? '');
       if (contentType.includes('javascript') || contentType.includes('ecmascript')) {
@@ -616,8 +635,31 @@ const opencodeStreamingProxy = createProxyMiddleware({
   },
 });
 
-app.use(/^\/proxy\/opencode\/(?:global\/)?event(?:\?.*)?$/, openCodeProxyAccessMiddleware, opencodeStreamingProxy);
-app.use(/^\/clawos\/proxy\/opencode\/(?:global\/)?event(?:\?.*)?$/, openCodeProxyAccessMiddleware, opencodeStreamingProxy);
+function isOpenCodeStreamingPath(originalUrl: string): boolean {
+  return /\/(global\/)?event(\?|$)/.test(originalUrl) || /\/session\/[^/]+\/prompt(_async)?(\?|$)/.test(originalUrl);
+}
+
+function openCodeStreamingRouteMatcher(req: express.Request, res: express.Response, next: express.NextFunction): void {
+  if (isOpenCodeStreamingPath(req.originalUrl)) {
+    openCodeProxyAccessMiddleware(req, res, () => {
+      opencodeStreamingProxy(req, res, next);
+    });
+    return;
+  }
+  next();
+}
+
+// Server-side URL rewrite: forward OpenCode API requests (that bypass client rewrite) to proxy
+const OPENCODE_API_PATTERN = /^\/(session|global|provider|file|vcs|path|project|prompt|credential|command|integration|fs|health|upgrade|dispose)\b/;
+app.use((req, _res, next) => {
+  if (OPENCODE_API_PATTERN.test(req.path) && hasOpenCodeAppAccess(req.headers.cookie)) {
+    req.url = '/proxy/opencode' + req.url;
+  }
+  next();
+});
+
+app.use('/proxy/opencode', openCodeStreamingRouteMatcher);
+app.use('/clawos/proxy/opencode', openCodeStreamingRouteMatcher);
 app.use('/proxy/opencode/assets', openCodeProxyAccessMiddleware, opencodeAssetRewriteProxy);
 app.use('/clawos/proxy/opencode/assets', openCodeProxyAccessMiddleware, opencodeAssetRewriteProxy);
 app.use('/proxy/opencode', openCodeProxyAccessMiddleware, opencodeAssetRewriteProxy);
